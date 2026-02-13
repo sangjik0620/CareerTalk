@@ -3,7 +3,6 @@ package com.careertalk.file.controller;
 import com.careertalk.file.dto.FileUploadResponse;
 import com.careertalk.file.service.S3Service;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
