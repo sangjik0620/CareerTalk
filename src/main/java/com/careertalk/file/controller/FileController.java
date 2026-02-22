@@ -19,13 +19,15 @@ public class FileController {
     private final S3Service s3Service;
 
     @PostMapping
-    public FileUploadResponse upload(
-            @RequestParam MultipartFile file) throws IOException {
+    public FileUploadResponse upload(@RequestParam MultipartFile file) throws IOException {
 
-        Long userId = 1L; // 임시 테스트용
-
+        long userId = 1L; // 임시 테스트용
         String key = s3Service.uploadFile(file, userId);
-        return new FileUploadResponse(key);
-    }
 
+        return FileUploadResponse.builder()
+                .s3Key(key)
+                .originalName(file.getOriginalFilename())
+                .message("업로드 성공")
+                .build();
+    }
 }
