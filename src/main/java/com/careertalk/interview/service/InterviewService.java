@@ -2,7 +2,9 @@ package com.careertalk.interview.service;
 
 import com.careertalk.file.entity.FileEntity;
 import com.careertalk.file.repository.FileRepository;
+import com.careertalk.file.s3.S3PresignedUrlService;
 import com.careertalk.file.s3.S3Uploader;
+import com.careertalk.interview.dto.InterviewSessionResultResponse;
 import com.careertalk.interview.entity.InterviewSession;
 import com.careertalk.interview.entity.InterviewTurn;
 import com.careertalk.interview.repository.InterviewSessionRepository;
@@ -25,6 +27,7 @@ public class InterviewService {
     private final InterviewTurnRepository turnRepository;
     private final FileRepository fileRepository;
     private final S3Uploader s3Uploader;
+    private final S3PresignedUrlService presignedUrlService;
 
     @Transactional
     public Long saveInterviewVoice(
@@ -92,6 +95,58 @@ public class InterviewService {
         }
 
         return session.getSessionId();
+    }
+
+    @Transactional(readOnly = true)
+    public InterviewSessionResultResponse getVoiceResult(Long sessionId) {
+        InterviewSession session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("session not found"));
+
+        List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
+
+        // 1) fileId들 모아서 한번에 조회
+        List<Long> fileIds = turns.stream()
+                .map(InterviewTurn::getAnswerAudioFileId)
+                .filter(id -> id != null)
+                .distinct()
+                .toList();
+
+        // 2) files 한 번에 로딩 → Map으로 변환
+        java.util.Map<Long, FileEntity> fileMap = fileIds.isEmpty()
+                ? java.util.Map.of()
+                : fileRepository.findAllById(fileIds).stream()
+                .collect(java.util.stream.Collectors.toMap(FileEntity::getFileId, f -> f));
+
+        // 3) 응답 만들기 (presigned는 여기서만 발급)
+        List<InterviewSessionResultResponse.TurnItem> items = turns.stream().map(t -> {
+            String url = null;
+
+            Long fid = t.getAnswerAudioFileId();
+            if (fid != null) {
+                FileEntity f = fileMap.get(fid);
+                if (f != null && "ACTIVE".equals(f.getStatus())) { // 소프트삭제 대응 (추천)
+                    url = presignedUrlService.presignGetUrl(
+                            f.getS3Bucket(),
+                            f.getS3Key(),
+                            java.time.Duration.ofMinutes(10)
+                    );
+                }
+            }
+
+            return new InterviewSessionResultResponse.TurnItem(
+                    t.getTurnNo(),
+                    t.getAiQuestion(),
+                    url
+            );
+        }).toList();
+
+        return new InterviewSessionResultResponse(
+                session.getSessionId(),
+                session.getTitle(),
+                session.getStatus(),
+                session.getMode(),
+                items
+        );
     }
 
     private static byte[] sha256Bytes(String v) {
