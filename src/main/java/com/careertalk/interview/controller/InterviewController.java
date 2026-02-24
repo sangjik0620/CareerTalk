@@ -1,5 +1,6 @@
 package com.careertalk.interview.controller;
 
+import com.careertalk.interview.dto.InterviewSessionResultResponse;
 import com.careertalk.interview.service.InterviewService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -36,5 +37,10 @@ public class InterviewController {
                 "sessionId", sessionId,
                 "message", "업로드 성공"
         ));
+    }
+
+    @GetMapping("/sessions/{sessionId}/result")
+    public ResponseEntity<InterviewSessionResultResponse> getResult(@PathVariable Long sessionId) {
+        return ResponseEntity.ok(interviewService.getVoiceResult(sessionId));
     }
 }
