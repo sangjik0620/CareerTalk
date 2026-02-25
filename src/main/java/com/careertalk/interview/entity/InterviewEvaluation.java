@@ -7,6 +7,7 @@ import java.time.LocalDateTime;
 
 public class InterviewEvaluation {
     public JsonNode getResultJson() {
+        return null;
     }
 
     public void setSessionId(Long sessionId) {
