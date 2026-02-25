@@ -30,15 +30,17 @@ public class PortfolioAnalysisService {
 
     private final PortfolioRepository portfolioRepository;
     private final AnalysisRepository analysisRepository;
-    private final ObjectMapper objectMapper; // JSON 파싱 마법사
+    private final ObjectMapper objectMapper;
 
     @Transactional
-    public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String targetJob) {
+    // ⭐ 파라미터가 2개(대분류, 상세)로 나뉘었습니다!
+    public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String jobCategory, String detailedPosition) {
 
-        // 1. 파일 저장 (가정) 및 포트폴리오 엔티티 생성
-
+        // ==========================================================
+        // 1. 포트폴리오 엔티티 저장
+        // ==========================================================
         Long dummyFileId = 1L;
-        Long currentUserId = 100L; // (가정) 현재 로그인한 유저 ID
+        Long currentUserId = 1L; // 실제 존재하는 유저 ID
 
         PortfolioEntity portfolio = PortfolioEntity.builder()
                 .userId(currentUserId)
@@ -47,26 +49,33 @@ public class PortfolioAnalysisService {
                 .status("ACTIVE")
                 .build();
 
-        // 포트폴리오 전용 레포지토리에 저장!
         portfolioRepository.save(portfolio);
 
+        // ==========================================================
+        // ⭐ 2. AI 분석용 텍스트 조합 (예: "IT/소프트웨어 (프론트엔드 개발자)")
+        // ==========================================================
+        String promptTargetJob = jobCategory;
+        if (detailedPosition != null && !detailedPosition.isBlank()) {
+            promptTargetJob += " (" + detailedPosition + ")";
+        }
 
+        // System.out.println("AI에게 던질 직무 프롬프트: " + promptTargetJob);
+        // (가정) aiService.analyze(file, promptTargetJob);
 
-        // 2. AI 분석 결과 (가짜 데이터 모킹)
-        // 실제로는 여기서 AI 서버로 파일을 보내고 결과를 기다립니다.
-
+        // ==========================================================
+        // 3. AI 분석 결과 (가짜 데이터)
+        // ==========================================================
         String mockScoreJson = "{\"직무 적합성\":90, \"문제 해결력\":95, \"성장 잠재력\":85, \"협업·소통\":80, \"프로젝트 완성도\":88}";
-        String mockQuestionsJson = "[{\"q\":\"캐싱 정합성은 어떻게 해결했나요?\",\"intent\":\"기술 깊이 검증\"}, {\"q\":\"팀원과 의견 충돌 시?\",\"intent\":\"협업 능력 검증\"}]";
+        String mockQuestionsJson = "[{\"q\":\"캐싱 정합성은 어떻게 해결했나요?\",\"intent\":\"기술 깊이 검증\"}, {\"q\":\"팀원과 의견 충돌 시?\",\"intent\":\"협업 능력 검증\"}, {\"q\":\"팀원과 의견 충돌 시?\",\"intent\":\"협업 능력 검증\"}]";
 
-
-
-        // 3. 공통 분석 테이블에 결과 저장 (AnalysisEntity)
-
+        // ==========================================================
+        // ⭐ 4. 공통 분석 테이블에 결과 저장 (DB에는 깔끔하게 대분류만!)
+        // ==========================================================
         AnalysisEntity analysis = AnalysisEntity.builder()
                 .userId(currentUserId)
-                .targetType("PORTFOLIO") // ⭐ 다형성: 나는 포트폴리오 분석 결과다!
-                .targetId(portfolio.getPortfolioId()) // 방금 저장한 포폴 PK 연결
-                .targetJob(targetJob)
+                .targetType("PORTFOLIO")
+                .targetId(portfolio.getPortfolioId())
+                .targetJob(jobCategory) // 👈 상세 포지션 떼고 대분류만 저장!
                 .overallScore(88)
                 .scoreJson(mockScoreJson)
                 .expectedQuestionsJson(mockQuestionsJson)
@@ -75,31 +84,24 @@ public class PortfolioAnalysisService {
                 .status("SUCCESS")
                 .build();
 
-        // 팀 공통 레포지토리에 저장
         analysisRepository.save(analysis);
 
-
-
-        // 4. 저장된 DB 데이터를 프론트엔드용 DTO로 변환
-
+        // 5. 프론트엔드용 DTO로 변환
         return convertToResponseDto(analysis);
     }
 
     private PortfolioAnalysisResponse convertToResponseDto(AnalysisEntity analysis) {
         try {
-            // 4-1. JSON 문자열 ➡ 자바 List<QuestionDto> 로 변환
             List<QuestionDto> questionList = objectMapper.readValue(
                     analysis.getExpectedQuestionsJson(),
                     new TypeReference<List<QuestionDto>>() {}
             );
 
-            // 4-2. JSON 문자열 ➡ Map ➡ List<ChartDataDto> 로 변환
             Map<String, Integer> scoreMap = objectMapper.readValue(
                     analysis.getScoreJson(),
                     new TypeReference<Map<String, Integer>>() {}
             );
 
-            // Map을 돌면서 ChartDataDto로 포장
             List<ChartDataDto> chartDataList = scoreMap.entrySet().stream()
                     .map(entry -> ChartDataDto.builder()
                             .subject(entry.getKey())
@@ -108,9 +110,9 @@ public class PortfolioAnalysisService {
                             .build())
                     .collect(Collectors.toList());
 
-            // 4-3. 최종 포장해서 반환
             return PortfolioAnalysisResponse.builder()
                     .targetJob(analysis.getTargetJob())
+                    .overallScore(analysis.getOverallScore())
                     .oneLineReview(analysis.getOneLineReview())
                     .summaryDetail(analysis.getSummaryDetail())
                     .chartData(chartDataList)
