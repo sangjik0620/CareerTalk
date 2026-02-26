@@ -13,6 +13,7 @@ import java.util.List;
 @AllArgsConstructor
 public class PortfolioAnalysisResponse {
 
+    private Long portfolioId;
     private String targetJob;       // 목표 직무
     private Integer overallScore;
     private String oneLineReview;   // AI 한 줄 평
