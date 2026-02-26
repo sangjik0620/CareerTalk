@@ -118,6 +118,21 @@ public class PortfolioAnalysisService {
         return processAndSaveAiResult(newAiResultJson, portfolio.getUserId(), portfolioId, jobCategory);
     }
 
+    @Transactional(readOnly = true)
+    public PortfolioAnalysisResponse getAnalysisResult(Long analysisId) {
+
+        // 1. DB에서 해당 포트폴리오의 가장 최근 분석 기록을 찾습니다.
+        AnalysisEntity analysis = analysisRepository.findById(analysisId)
+                .orElseThrow(() -> new RuntimeException("해당 포트폴리오의 분석 결과를 찾을 수 없습니다."));
+
+        // 2. 찾아낸 엔티티를 프론트엔드가 좋아하는 DTO 형태로 변환해서 돌려줍니다!
+        try {
+            return convertToResponseDto(analysis);
+        } catch (JsonProcessingException e) {
+            log.error("JSON 파싱 에러", e);
+            throw new RuntimeException("분석 결과를 불러오는 중 오류가 발생했습니다.");
+        }
+    }
 
 
     // 프롬프트 텍스트 파일 읽어오는 공통 메서드
@@ -154,9 +169,9 @@ public class PortfolioAnalysisService {
                     .status("SUCCESS")
                     .build();
 
-            analysisRepository.save(analysis);
+            AnalysisEntity savedAnalysis = analysisRepository.save(analysis);
 
-            return convertToResponseDto(analysis);
+            return convertToResponseDto(savedAnalysis);
 
         } catch (Exception e) {
             log.error("AI 응답 결과 처리 중 에러 발생", e);
@@ -182,6 +197,7 @@ public class PortfolioAnalysisService {
                 .collect(Collectors.toList());
 
         return PortfolioAnalysisResponse.builder()
+                .analysisId(analysis.getAnalysisId())
                 .portfolioId(analysis.getTargetId())
                 .targetJob(analysis.getTargetJob())
                 .overallScore(analysis.getOverallScore())

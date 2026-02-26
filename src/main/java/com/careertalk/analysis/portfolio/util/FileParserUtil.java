@@ -14,9 +14,7 @@ import org.springframework.web.multipart.MultipartFile;
 @Component // 스프링이 관리하는 빈으로 등록
 public class FileParserUtil {
 
-    /**
-     * MultipartFile을 받아서 확장자에 따라 텍스트를 추출해주는 만능 메서드
-     */
+
     public String extractText(MultipartFile file) {
         String fileName = file.getOriginalFilename();
         if (fileName == null) return "";

@@ -40,5 +40,16 @@ public class PortfolioAnalysisController {
         return ResponseEntity.ok(response);
     }
 
+    @GetMapping("/{analysisId}/result")
+    public ResponseEntity<PortfolioAnalysisResponse> getPortfolioResult(
+            @PathVariable("analysisId") Long analysisId) {
+
+
+        // 방금 만든 Service 메서드 호출!
+        PortfolioAnalysisResponse response = portfolioAnalysisService.getAnalysisResult(analysisId);
+
+        return ResponseEntity.ok(response);
+    }
+
 
 }
