@@ -3,11 +3,12 @@ package com.careertalk.analysis.portfolio.controller;
 import com.careertalk.analysis.portfolio.dto.PortfolioAnalysisResponse;
 import com.careertalk.analysis.portfolio.service.PortfolioAnalysisService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.MediaType;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/portfolios")
 @RequiredArgsConstructor
@@ -20,10 +21,24 @@ public class PortfolioAnalysisController {
     public PortfolioAnalysisResponse analyzePortfolio(
             @RequestPart("file") MultipartFile file,
             @RequestParam("jobCategory") String jobCategory,
-            // 상세 포지션은 선택사항(required = false)으로 설정
+
             @RequestParam(value = "detailedPosition", required = false) String detailedPosition
     ) {
-        // 서비스로 두 개를 모두 넘겨줍니다.
+
         return portfolioAnalysisService.analyzeAndSave(file, jobCategory, detailedPosition);
     }
+
+    @PostMapping("/{portfolioId}/reanalyze")
+    public ResponseEntity<PortfolioAnalysisResponse> reanalyzePortfolio(
+            @PathVariable("portfolioId") Long portfolioId) {
+
+        log.info("재분석 요청 들어옴 - 포트폴리오 ID: {}", portfolioId);
+
+        // 서비스의 reanalyze 메서드 호출!
+        PortfolioAnalysisResponse response = portfolioAnalysisService.reanalyze(portfolioId);
+
+        return ResponseEntity.ok(response);
+    }
+
+
 }

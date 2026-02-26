@@ -35,6 +35,9 @@ public class PortfolioEntity {
     @Column(name = "status", length = 20)
     private String status;
 
+    @Column(columnDefinition = "LONGTEXT")
+    private String extractedText;
+
     @CreatedDate
     @Column(name = "created_at", updatable = false, nullable = false)
     private LocalDateTime createdAt;
@@ -43,11 +46,13 @@ public class PortfolioEntity {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+
     @Builder
-    public PortfolioEntity(Long userId, Long fileId, String title, String status) {
+    public PortfolioEntity(Long userId, Long fileId, String title, String status, String extractedText) {
         this.userId = userId;
         this.fileId = fileId;
         this.title = title;
         this.status = status;
+        this.extractedText = extractedText;
     }
 }
