@@ -1,6 +1,5 @@
 package com.careertalk.interview.service;
 
-import com.careertalk.interview.entity.InterviewEvaluation;
 import com.careertalk.interview.entity.InterviewSession;
 import com.careertalk.interview.entity.InterviewTurn;
 import com.careertalk.interview.repository.InterviewEvaluationRepository;
@@ -19,6 +18,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -30,27 +30,36 @@ public class InterviewEvaluationService {
 
     @Transactional
     public JsonNode getOrCreateEvaluationResultJson(Long sessionId) {
-        InterviewEvaluation eval = evaluationRepository.findById(sessionId).orElse(null);
-        if (eval != null && eval.getResultJson() != null) {
-            return eval.getResultJson();
+        String saved = evaluationRepository.findResultJsonBySessionId(sessionId);
+        if (saved != null && !saved.isBlank()) {
+            try {
+                return objectMapper.readTree(saved);
+            } catch (Exception ignored) {
+                // 저장된 JSON이 깨졌을 때만 재생성
+            }
         }
 
         InterviewSession session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new NoSuchElementException("session not found"));
-
         List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
 
         ObjectNode json = buildDummyEvaluationJson(session, turns);
 
-        if (eval == null) {
-            eval = new InterviewEvaluation();
-            eval.setSessionId(sessionId);
-        }
-        eval.setOverallScore(json.path("summary").path("overallScore").asInt(0));
-        eval.setResultJson(json);
-        eval.setGeneratedAt(LocalDateTime.now());
-        evaluationRepository.save(eval);
+        int overall = json.path("summary").path("overallScore").asInt(0);
 
+        String jsonStr;
+        try {
+            jsonStr = objectMapper.writeValueAsString(json);
+        } catch (Exception e) {
+            throw new IllegalStateException("serialize failed", e);
+        }
+
+        // 파생 컬럼 동기화 (선택이지만 테이블에 있으니 같이 저장 추천)
+        String strengths = joinArray(json.path("summary").path("strengths"));
+        String weaknesses = joinArray(json.path("summary").path("weaknesses"));
+        String nextActions = joinNextActions(json.path("summary").path("nextActions"));
+
+        evaluationRepository.upsert(sessionId, overall, strengths, weaknesses, nextActions, jsonStr);
         return json;
     }
 
@@ -75,18 +84,43 @@ public class InterviewEvaluationService {
         interviewInfo.put("position", safe(session.getTitle(), "프론트엔드 개발자"));
         interviewInfo.put("company", "ABC Tech");
 
-        // summary
+        // summary (프론트 스키마 1:1로 채우기)
         ObjectNode summary = root.putObject("summary");
         summary.put("overallScore", overall);
         summary.put("previousScore", prev);
         summary.put("passedAverage", passedAvg);
-        summary.put("totalQuestions", totalQ);
-        summary.put("answeredQuestions", answeredQ);
 
         summary.putArray("strengths").add("기술 역량").add("문제 해결 능력").add("커뮤니케이션");
         summary.putArray("weaknesses").add("답변 구조화").add("구체적 사례 부족").add("시간 관리");
 
-        // documentAnalysis (더미)
+        summary.put("totalQuestions", totalQ);
+        summary.put("answeredQuestions", answeredQ);
+
+        summary.put("verdict", pickVerdict(overall)); // "합격권" | "보류" | "개선필요"
+        summary.put("percentileRank", percentile);
+
+        summary.put("confidenceIndex", clamp(overall - r.nextInt(0, 10)));
+        summary.put("jobFitIndex", clamp(overall - r.nextInt(0, 8)));
+        summary.put("technicalIndex", clamp(overall + r.nextInt(0, 8)));
+        summary.put("communicationIndex", clamp(overall - r.nextInt(0, 12)));
+
+        summary.put("avgResponseTimeSec", round1(r.nextDouble(5.5, 12.5)));
+        summary.put("fillerWordRate", round1(r.nextDouble(2.0, 10.0)));
+        summary.put("sentimentScore", clamp(r.nextInt(55, 90)));
+
+        summary.putArray("topKeywords")
+                .add("React")
+                .add("성능 최적화")
+                .add("협업")
+                .add("문제 해결")
+                .add("사용자 관점");
+
+        var next = summary.putArray("nextActions");
+        next.addObject().put("title", "STAR 답변 템플릿 10문항 작성").put("dueDays", 3);
+        next.addObject().put("title", "모의면접 3회 + 피드백 반영").put("dueDays", 7);
+        next.addObject().put("title", "프로젝트 성과지표(수치) 5개 정리").put("dueDays", 5);
+
+        // documentAnalysis
         ObjectNode doc = root.putObject("documentAnalysis");
         ObjectNode resume = doc.putObject("resume");
         resume.put("score", r.nextInt(70, 91));
@@ -155,7 +189,7 @@ public class InterviewEvaluationService {
         cat.set("experience", triple(clamp(overall - 7), r.nextInt(70, 86), clamp(prev - 9)));
         comp.put("percentileRank", percentile);
 
-        // competency (더미)
+        // competency
         ObjectNode competency = root.putObject("competency");
         ObjectNode tech = competency.putObject("technical");
         tech.put("current", clamp(overall + 4));
@@ -242,5 +276,37 @@ public class InterviewEvaluationService {
             return min + "분";
         }
         return "45분";
+    }
+
+    private String pickVerdict(int overall) {
+        if (overall >= 82) return "합격권";
+        if (overall >= 70) return "보류";
+        return "개선필요";
+    }
+
+    private String joinArray(JsonNode arr) {
+        if (arr == null || !arr.isArray()) return null;
+        return toStream(arr).collect(Collectors.joining("\n"));
+    }
+
+    private String joinNextActions(JsonNode arr) {
+        if (arr == null || !arr.isArray()) return null;
+        StringBuilder sb = new StringBuilder();
+        for (JsonNode n : arr) {
+            String title = n.path("title").asText("");
+            int due = n.path("dueDays").asInt(0);
+            if (!title.isBlank()) {
+                if (!sb.isEmpty()) sb.append("\n");
+                sb.append(title).append(" (D-").append(due).append(")");
+            }
+        }
+        return sb.isEmpty() ? null : sb.toString();
+    }
+
+    private java.util.stream.Stream<String> toStream(JsonNode arr) {
+        java.util.Iterator<JsonNode> it = arr.elements();
+        java.util.List<String> out = new java.util.ArrayList<>();
+        while (it.hasNext()) out.add(it.next().asText());
+        return out.stream();
     }
 }
