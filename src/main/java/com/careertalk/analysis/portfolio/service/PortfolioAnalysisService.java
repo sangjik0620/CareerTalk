@@ -169,9 +169,9 @@ public class PortfolioAnalysisService {
                     .status("SUCCESS")
                     .build();
 
-            analysisRepository.save(analysis);
+            AnalysisEntity savedAnalysis = analysisRepository.save(analysis);
 
-            return convertToResponseDto(analysis);
+            return convertToResponseDto(savedAnalysis);
 
         } catch (Exception e) {
             log.error("AI 응답 결과 처리 중 에러 발생", e);
