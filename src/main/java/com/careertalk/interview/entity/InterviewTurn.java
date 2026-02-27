@@ -2,6 +2,7 @@ package com.careertalk.interview.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import java.time.LocalDateTime;
 
 @Entity
 @Data
@@ -37,6 +38,33 @@ public class InterviewTurn {
     @Column(name = "stt_text")
     private String sttText;
 
-    @Column(name = "feedback_json", columnDefinition = "json")
+    // ✅ STT 상태/재시도/에러
+    @Enumerated(EnumType.STRING)
+    @Column(name = "stt_status", nullable = false, length = 20)
+    private SttStatus sttStatus = SttStatus.PENDING;
+
+    @Column(name = "stt_attempt_count", nullable = false)
+    private Integer sttAttemptCount = 0;
+
+    @Lob
+    @Column(name = "stt_error_message")
+    private String sttErrorMessage;
+
+    @Column(name = "stt_started_at")
+    private LocalDateTime sttStartedAt;
+
+    @Column(name = "stt_completed_at")
+    private LocalDateTime sttCompletedAt;
+
+    @Column(name = "created_at", nullable = false, updatable = false, insertable = false)
+    private LocalDateTime createdAt;
+
+    @Column(name = "updated_at", nullable = false, insertable = false)
+    private LocalDateTime updatedAt;
+
+    @Column(name = "answer_audio_duration_sec")
+    private Integer answerAudioDurationSec;
+
+    @Column(name = "feedback_json", columnDefinition = "JSON")
     private String feedbackJson;
 }
