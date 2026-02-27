@@ -67,4 +67,7 @@ public class InterviewTurn {
 
     @Column(name = "feedback_json", columnDefinition = "JSON")
     private String feedbackJson;
+
+    @Column(name="audio_metrics_json", columnDefinition="JSON")
+    private String audioMetricsJson;
 }
