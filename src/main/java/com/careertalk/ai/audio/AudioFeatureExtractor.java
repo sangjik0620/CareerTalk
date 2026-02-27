@@ -84,4 +84,37 @@ public class AudioFeatureExtractor {
         }
         return err;
     }
+
+    public Double getSilenceRatio(Path audioPath) throws Exception {
+        // dB 기준은 일단 -35dB, 최소 침묵 길이 0.3초(너무 민감하지 않게)
+        // 필요하면 -30dB / 0.2s 등으로 조절
+        List<String> cmd = List.of(
+                "ffmpeg",
+                "-i", audioPath.toAbsolutePath().toString(),
+                "-af", "silencedetect=noise=-35dB:d=0.3",
+                "-f", "null",
+                "-"
+        );
+
+        String stderr = runWithStderr(cmd);
+
+        // silence_duration: 1.234 형태들을 모두 찾아 합산
+        double silenceTotal = 0.0;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("silence_duration:\\s*([0-9\\.]+)")
+                .matcher(stderr);
+
+        while (m.find()) {
+            silenceTotal += Double.parseDouble(m.group(1));
+        }
+
+        double duration = getDurationSeconds(audioPath);
+        if (duration <= 0) return null;
+
+        double ratio = silenceTotal / duration;
+        // 0~1 범위로 클램프
+        if (ratio < 0) ratio = 0;
+        if (ratio > 1) ratio = 1;
+        return ratio;
+    }
 }
