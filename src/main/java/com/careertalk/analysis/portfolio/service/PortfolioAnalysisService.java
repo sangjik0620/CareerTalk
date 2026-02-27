@@ -9,6 +9,12 @@ import com.careertalk.analysis.portfolio.entity.PortfolioEntity;
 import com.careertalk.analysis.portfolio.repository.PortfolioRepository;
 import com.careertalk.analysis.portfolio.util.FileParserUtil;
 import com.careertalk.analysis.commonrepository.AnalysisRepository;
+
+// ⭐ 추가된 Import (FileEntity, Repository, S3Service 등)
+import com.careertalk.file.entity.FileEntity;
+import com.careertalk.file.repository.FileRepository;
+import com.careertalk.file.service.S3Service;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -22,7 +28,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StreamUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -35,31 +44,63 @@ public class PortfolioAnalysisService {
     private final PortfolioRepository portfolioRepository;
     private final AnalysisRepository analysisRepository;
     private final ObjectMapper objectMapper;
-
-    // 조립할 부품들 주입
     private final OpenAiService openAiService;
     private final FileParserUtil fileParserUtil;
 
-    // 프롬프트 파일 불러오기
+    // ⭐ S3 서비스 및 File 리포지토리 의존성 주입
+    private final S3Service s3Service;
+    private final FileRepository fileRepository;
+
+    @Value("${aws.s3.bucket}") // application.yml에 있는 버킷명 가져오기
+    private String s3BucketName;
+
     @Value("classpath:prompts/portfolio-analysis-prompt.txt")
     private Resource systemPromptResource;
-
-
-    // 1. 최초 분석 기능
 
     @Transactional
     public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String jobCategory, String detailedPosition) {
 
-        String extractedText = fileParserUtil.extractText(file);
-        log.info("파일에서 추출된 텍스트 길이: {}자", extractedText.length());
+        Long currentUserId = 1L;
 
-        // ⭐ 1. 썸네일 이미지 리스트 추출
+        // ⭐ 1. S3에 파일 업로드
+        String s3Key = "";
+        try {
+            s3Key = s3Service.uploadFile(file, currentUserId);
+        } catch (IOException e) {
+            throw new RuntimeException("S3 파일 업로드에 실패했습니다.", e);
+        }
+
+        // ⭐ 2. 보여주신 FileEntity 구조에 맞춰 DB에 저장 (s3KeyHash 생성 포함)
+        Long realFileId;
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(s3Key.getBytes(StandardCharsets.UTF_8));
+
+            FileEntity fileEntity = new FileEntity();
+            fileEntity.setUserId(currentUserId);
+            fileEntity.setFileType("PORTFOLIO");
+            fileEntity.setOriginalName(file.getOriginalFilename());
+            fileEntity.setMimeType(file.getContentType());
+            fileEntity.setFileSize(file.getSize());
+            fileEntity.setS3Bucket(s3BucketName);
+            fileEntity.setS3Key(s3Key);
+            fileEntity.setS3KeyHash(hash);
+            fileEntity.setStatus("ACTIVE");
+
+            FileEntity savedFile = fileRepository.save(fileEntity);
+            realFileId = savedFile.getFileId(); // 진짜 fileId 발급 완료!
+        } catch (Exception e) {
+            log.error("파일 DB 저장 실패", e);
+            throw new RuntimeException("파일 정보 저장 중 오류가 발생했습니다.");
+        }
+
+        // 기존 텍스트 및 이미지 추출 로직 유지
+        String extractedText = fileParserUtil.extractText(file);
         List<String> base64Images = fileParserUtil.extractImagesAsBase64(file);
 
-        Long currentUserId = 1L;
         PortfolioEntity portfolio = PortfolioEntity.builder()
                 .userId(currentUserId)
-                .fileId(1L)
+                .fileId(realFileId) // 발급받은 진짜 ID로 교체
                 .title(file.getOriginalFilename())
                 .extractedText(extractedText)
                 .status("ACTIVE")
@@ -73,42 +114,44 @@ public class PortfolioAnalysisService {
         String userPrompt = "지원 직무: " + targetJobData + "\n\n포트폴리오 내용:\n" + extractedText;
 
         log.info("AI 분석 시작... (직무: {})", targetJobData);
-        // ⭐ 2. AI 호출 시 이미지 리스트 함께 전달
         String aiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, base64Images);
         log.info("AI 분석 완료!");
 
         return processAndSaveAiResult(aiResultJson, currentUserId, portfolio.getPortfolioId(), jobCategory);
     }
 
-
-    // 2. 재분석 기능
-
     @Transactional
     public PortfolioAnalysisResponse reanalyze(Long portfolioId) {
 
-        // 1. DB에서 기존 포트폴리오 찾기 (텍스트가 저장되어 있음!)
         PortfolioEntity portfolio = portfolioRepository.findById(portfolioId)
                 .orElseThrow(() -> new RuntimeException("포트폴리오 정보를 찾을 수 없습니다."));
 
         String savedText = portfolio.getExtractedText();
-        if (savedText == null || savedText.isBlank()) {
-            throw new RuntimeException("저장된 포트폴리오 텍스트가 없습니다. 원본 파일을 다시 업로드해주세요.");
-        }
-
-        // 2. 직무 정보(jobCategory)를 가져오기 위해 가장 최근 분석 기록 찾기
+        Long fileId = portfolio.getFileId(); // 저장해둔 fileId 꺼내기
 
         AnalysisEntity lastAnalysis = analysisRepository.findFirstByTargetIdOrderByAnalysisIdDesc(portfolioId)
                 .orElseThrow(() -> new RuntimeException("이전 분석 기록을 찾을 수 없습니다."));
-
         String jobCategory = lastAnalysis.getTargetJob();
 
-        // 3. 프롬프트 조립
+        // ⭐ 1. FileEntity에서 정확한 필드(getS3Key)로 경로 가져오기
+        FileEntity fileEntity = fileRepository.findById(fileId)
+                .orElseThrow(() -> new RuntimeException("원본 파일 정보를 찾을 수 없습니다."));
+        String s3Key = fileEntity.getS3Key();
+
+        // ⭐ 2. S3에서 파일 다운로드 및 이미지 다시 추출
+        List<String> base64Images = new ArrayList<>();
+        try (java.io.InputStream fileStream = s3Service.downloadFile(s3Key)) {
+            base64Images = fileParserUtil.extractImagesAsBase64FromStream(fileStream, portfolio.getTitle());
+            log.info("S3에서 파일을 불러와 재분석용 이미지를 추출했습니다.");
+        } catch (Exception e) {
+            log.error("재분석용 S3 파일 추출 실패 (텍스트로만 진행합니다)", e);
+        }
+
         String systemPrompt = getSystemPrompt();
         String userPrompt = "지원 직무: " + jobCategory + "\n\n포트폴리오 내용:\n" + savedText;
 
-        log.info("포트폴리오 ID: {} 재분석을 시작합니다... (파일 추출 생략)", portfolioId);
-        // ⭐ 3. 재분석 시에는 원본 파일이 없으므로 이미지에 null 전달 (텍스트만으로 재분석)
-        String newAiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, null);
+        log.info("포트폴리오 ID: {} 재분석을 시작합니다...", portfolioId);
+        String newAiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, base64Images);
         log.info("AI 재분석 완료!");
 
         return processAndSaveAiResult(newAiResultJson, portfolio.getUserId(), portfolioId, jobCategory);
