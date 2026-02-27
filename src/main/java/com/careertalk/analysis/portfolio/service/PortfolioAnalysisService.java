@@ -195,6 +195,7 @@ public class PortfolioAnalysisService {
             String scoreJsonStr = rootNode.get("scoreJson").toString();
             String questionsJsonStr = rootNode.get("expectedQuestionsJson").toString();
 
+            // ⭐ 테이블 구조에 맞춰 모든 필드를 꼼꼼하게 채워줍니다.
             AnalysisEntity analysis = AnalysisEntity.builder()
                     .userId(userId)
                     .targetType("PORTFOLIO")
@@ -205,7 +206,12 @@ public class PortfolioAnalysisService {
                     .expectedQuestionsJson(questionsJsonStr)
                     .oneLineReview(oneLineReview)
                     .summaryDetail(summaryDetail)
+                    // --- 여기서부터 추가/수정 (NULL 방지) ---
                     .status("SUCCESS")
+                    .modelName("gpt-4o") // 사용 중인 모델명
+                    .modelVersion("2024-05-13") // 모델 버전
+                    .promptVersion("v1.0") // 프롬프트 버전 관리용
+                    .analyzedAt(java.time.LocalDateTime.now()) // 분석 완료 시점
                     .build();
 
             AnalysisEntity savedAnalysis = analysisRepository.save(analysis);
@@ -214,6 +220,7 @@ public class PortfolioAnalysisService {
 
         } catch (Exception e) {
             log.error("AI 응답 결과 처리 중 에러 발생", e);
+            // 에러 발생 시 status를 ERROR로 저장하는 로직을 추가하면 더 좋습니다.
             throw new RuntimeException("분석 결과를 저장하는 중 오류가 발생했습니다.");
         }
     }
