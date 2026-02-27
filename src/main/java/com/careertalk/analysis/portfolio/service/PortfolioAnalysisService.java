@@ -50,36 +50,33 @@ public class PortfolioAnalysisService {
     @Transactional
     public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String jobCategory, String detailedPosition) {
 
-        // ⭐ 변경점 1: 포트폴리오 엔티티를 저장하기 "전"에 텍스트를 먼저 추출합니다!
         String extractedText = fileParserUtil.extractText(file);
         log.info("파일에서 추출된 텍스트 길이: {}자", extractedText.length());
 
-        // 1. 포트폴리오 엔티티 저장 (추출한 텍스트도 함께 DB에 보관!)
+        // ⭐ 1. 썸네일 이미지 리스트 추출
+        List<String> base64Images = fileParserUtil.extractImagesAsBase64(file);
+
         Long currentUserId = 1L;
         PortfolioEntity portfolio = PortfolioEntity.builder()
                 .userId(currentUserId)
                 .fileId(1L)
                 .title(file.getOriginalFilename())
-                .extractedText(extractedText) // ⭐ 여기에 텍스트를 영구 저장합니다.
+                .extractedText(extractedText)
                 .status("ACTIVE")
                 .build();
         portfolioRepository.save(portfolio);
 
-        // 2. AI에게 보낼 프롬프트 조립
         String systemPrompt = getSystemPrompt();
-
         String targetJobData = (detailedPosition != null && !detailedPosition.isBlank())
                 ? jobCategory + " (" + detailedPosition + ")"
                 : jobCategory;
-
         String userPrompt = "지원 직무: " + targetJobData + "\n\n포트폴리오 내용:\n" + extractedText;
 
-        // 3. OpenAI 호출하여 결과 받아오기
         log.info("AI 분석 시작... (직무: {})", targetJobData);
-        String aiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt);
+        // ⭐ 2. AI 호출 시 이미지 리스트 함께 전달
+        String aiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, base64Images);
         log.info("AI 분석 완료!");
 
-        // 4. 받아온 JSON 파싱해서 DB에 저장하고 반환하기
         return processAndSaveAiResult(aiResultJson, currentUserId, portfolio.getPortfolioId(), jobCategory);
     }
 
@@ -109,12 +106,11 @@ public class PortfolioAnalysisService {
         String systemPrompt = getSystemPrompt();
         String userPrompt = "지원 직무: " + jobCategory + "\n\n포트폴리오 내용:\n" + savedText;
 
-        // 4. AI에게 다시 물어보기 (버튼 딸깍!)
         log.info("포트폴리오 ID: {} 재분석을 시작합니다... (파일 추출 생략)", portfolioId);
-        String newAiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt);
+        // ⭐ 3. 재분석 시에는 원본 파일이 없으므로 이미지에 null 전달 (텍스트만으로 재분석)
+        String newAiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, null);
         log.info("AI 재분석 완료!");
 
-        // 5. 새로운 결과(Row)를 DB에 저장하고 반환하기
         return processAndSaveAiResult(newAiResultJson, portfolio.getUserId(), portfolioId, jobCategory);
     }
 

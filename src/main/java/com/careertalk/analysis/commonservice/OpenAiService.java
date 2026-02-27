@@ -6,6 +6,7 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,49 +15,60 @@ import java.util.Map;
 @Service
 public class OpenAiService {
 
-
     @Value("${ai.api-key}")
     private String apiKey;
 
     private final String OPENAI_URL = "https://api.openai.com/v1/chat/completions";
     private final RestTemplate restTemplate = new RestTemplate();
 
+    // ⭐ base64Images 파라미터 추가
+    public String getAiResponse(String systemPrompt, String userPrompt, List<String> base64Images) {
 
-    public String getAiResponse(String systemPrompt, String userPrompt) {
-
-        // 1. HTTP 헤더 설정
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(apiKey); // 인증키 설정
+        headers.setBearerAuth(apiKey);
 
-        // 2. 요청 바디 구성
         Map<String, Object> requestBody = new HashMap<>();
-        requestBody.put("model", "gpt-4o"); // 이미지 분석까지 가능한 최신 모델
-        requestBody.put("response_format", Map.of("type", "json_object")); // ⭐ JSON 응답 강제
+        requestBody.put("model", "gpt-4o");
+        requestBody.put("response_format", Map.of("type", "json_object"));
+
+        // ⭐ 텍스트와 이미지를 하나의 리스트로 조립
+        List<Map<String, Object>> contentList = new ArrayList<>();
+        contentList.add(Map.of("type", "text", "text", userPrompt));
+
+        if (base64Images != null && !base64Images.isEmpty()) {
+            for (String base64 : base64Images) {
+                // ⭐ 핵심: detail: low 를 줘서 해상도 상관없이 무조건 85토큰(약 0.2원)만 과금되도록 강제
+                contentList.add(Map.of(
+                        "type", "image_url",
+                        "image_url", Map.of(
+                                "url", "data:image/png;base64," + base64,
+                                "detail", "low"
+                        )
+                ));
+            }
+        }
 
         requestBody.put("messages", List.of(
                 Map.of("role", "system", "content", systemPrompt),
-                Map.of("role", "user", "content", userPrompt)
+                Map.of("role", "user", "content", contentList) // 변경됨
         ));
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
 
         try {
-            log.info("OpenAI API 호출 시작...");
+            log.info("OpenAI API 호출 시작... (이미지 {}장 포함)", base64Images != null ? base64Images.size() : 0);
 
-            // 3. API 호출
             ResponseEntity<Map> response = restTemplate.exchange(
                     OPENAI_URL, HttpMethod.POST, entity, Map.class
             );
 
-            // 4. 응답 데이터 파싱
             Map<String, Object> responseBody = response.getBody();
             if (responseBody == null) return null;
 
             List<Map<String, Object>> choices = (List<Map<String, Object>>) responseBody.get("choices");
             Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
 
-            // ⭐ 이것이 바로 우리가 기다리던 aiResultJson 입니다!
             String aiResultJson = (String) message.get("content");
 
             log.info("OpenAI API 호출 성공!");
