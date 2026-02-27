@@ -11,4 +11,7 @@ public class TurnSttResponse {
     private Integer attemptCount;
     private String sttText;
     private String errorMessage;
+
+    // ✅ 다음 화면 이동용(프론트가 navigate)
+    private String nextPath;
 }
