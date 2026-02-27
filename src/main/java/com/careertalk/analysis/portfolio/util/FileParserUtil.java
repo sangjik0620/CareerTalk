@@ -108,4 +108,46 @@ public class FileParserUtil {
         ImageIO.write(img, "png", baos);
         return Base64.getEncoder().encodeToString(baos.toByteArray());
     }
+    // ⭐ [신규 추가] S3에서 다운받은 InputStream용 이미지 추출 로직 (재분석용)
+    public List<String> extractImagesAsBase64FromStream(java.io.InputStream inputStream, String fileName) {
+        List<String> base64Images = new ArrayList<>();
+        if (fileName == null) return base64Images;
+
+        fileName = fileName.toLowerCase();
+
+        try {
+            if (fileName.endsWith(".pdf")) {
+                try (PDDocument document = PDDocument.load(inputStream)) {
+                    PDFRenderer pdfRenderer = new PDFRenderer(document);
+                    int pages = document.getNumberOfPages();
+                    for (int i = 0; i < pages; i++) {
+                        BufferedImage bim = pdfRenderer.renderImageWithDPI(i, 50);
+                        base64Images.add(convertToBase64(bim));
+                    }
+                }
+            } else if (fileName.endsWith(".pptx")) {
+                try (XMLSlideShow ppt = new XMLSlideShow(inputStream)) {
+                    Dimension pgsize = ppt.getPageSize();
+                    double scale = 0.3;
+                    int width = (int) (pgsize.width * scale);
+                    int height = (int) (pgsize.height * scale);
+
+                    int pages = ppt.getSlides().size();
+                    for (int i = 0; i < pages; i++) {
+                        XSLFSlide slide = ppt.getSlides().get(i);
+                        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+                        Graphics2D graphics = img.createGraphics();
+                        graphics.scale(scale, scale);
+                        slide.draw(graphics);
+                        base64Images.add(convertToBase64(img));
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Stream으로부터 이미지 썸네일 추출 중 에러 발생: {}", e.getMessage());
+        } finally {
+            try { if (inputStream != null) inputStream.close(); } catch (Exception ignore) {}
+        }
+        return base64Images;
+    }
 }
