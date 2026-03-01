@@ -38,11 +38,11 @@ public class TurnSttService {
     private final AudioFeatureExtractor audioFeatureExtractor;
     private final PythonAudioAnalysisClient pythonAudioAnalysisClient;
 
-    private final ObjectMapper objectMapper; // ✅ Spring Bean 주입
+    private final AudioScoreService audioScoreService; // ✅ 추가: 점수 계산 서비스
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public TurnSttResponse runStt(Long turnId, TurnSttRequest req) throws Exception {
-
         // 1️⃣ Turn 조회
         InterviewTurn turn = turnRepository.findById(turnId)
                 .orElseThrow(() -> new IllegalArgumentException("InterviewTurn not found: " + turnId));
@@ -95,50 +95,72 @@ public class TurnSttService {
             double durationSec = audioFeatureExtractor.getDurationSeconds(target);
             int durationInt = (int) Math.round(durationSec);
 
-            int wordCount = sttText.trim().isBlank() ? 0 :
+            int wordCount = sttText == null || sttText.trim().isBlank() ? 0 :
                     sttText.trim().split("\\s+").length;
 
-            double wps = durationSec > 0 ?
-                    (wordCount / durationSec) : 0.0;
+            double wps = durationSec > 0 ? (wordCount / durationSec) : 0.0;
 
             Double meanDb = audioFeatureExtractor.getMeanVolumeDb(target);
             Double silenceRatio = audioFeatureExtractor.getSilenceRatio(target);
 
-            // 8️⃣ Python 고급 분석
+            // 8️⃣ Python 고급 분석 (원본 JsonNode)
             JsonNode py = null;
             if (req.isToWav()) {
                 py = pythonAudioAnalysisClient.analyzeWav(target);
             }
 
-            // 9️⃣ metrics JSON 구성
-            Map<String, Object> metrics = new LinkedHashMap<>();
-            metrics.put("durationSec", durationSec);
-            metrics.put("wordCount", wordCount);
-            metrics.put("speechRateWps", wps);
-            metrics.put("meanVolumeDb", meanDb);
-            metrics.put("silenceRatio", silenceRatio);
+            // 9️⃣ audio_metrics_json (기본 지표만 저장)
+            Map<String, Object> audioMetrics = new LinkedHashMap<>();
+            audioMetrics.put("durationSec", durationSec);
+            audioMetrics.put("wordCount", wordCount);
+            audioMetrics.put("speechRateWps", wps);
+            audioMetrics.put("meanVolumeDb", meanDb);
+            audioMetrics.put("silenceRatio", silenceRatio);
 
-            if (py != null) {
+            // ✅ python_metrics_json (점수화에 필요한 값만 뽑아서 저장)
+            Map<String, Object> pythonMetrics = null;
+            if (py != null && !py.isNull()) {
+                pythonMetrics = new LinkedHashMap<>();
 
-                if (py.has("pitch")) {
-                    metrics.put("pitch",
-                            objectMapper.convertValue(py.get("pitch"), Map.class));
-                }
+                // pitch: mean/std/cv
+                // (FastAPI 응답이 pitch 객체 안에 mean/std/cv 형태라고 가정)
+                Double pitchMean = getDoublePath(py, "pitch.mean");
+                Double pitchStd  = getDoublePath(py, "pitch.std");
+                Double pitchCv   = getDoublePath(py, "pitch.cv");
 
-                if (py.has("voiceQuality")) {
-                    metrics.put("voiceQuality",
-                            objectMapper.convertValue(py.get("voiceQuality"), Map.class));
-                }
+                // voiceQuality: jitterLocal/shimmerLocal
+                Double jitterLocal  = getDoublePath(py, "voiceQuality.jitterLocal");
+                Double shimmerLocal = getDoublePath(py, "voiceQuality.shimmerLocal");
+
+                // 저장
+                pythonMetrics.put("pitchMean", pitchMean);
+                pythonMetrics.put("pitchStd", pitchStd);
+                pythonMetrics.put("pitchCv", pitchCv);
+                pythonMetrics.put("jitterLocal", jitterLocal);
+                pythonMetrics.put("shimmerLocal", shimmerLocal);
+
+                Double pyDurationSec = getDoublePath(py, "durationSec");
+                pythonMetrics.put("durationSec", pyDurationSec);
+
+                // 필요하면 원본도 함께 저장 가능(옵션)
+                // pythonMetrics.put("raw", objectMapper.convertValue(py, Map.class));
             }
 
-            // 🔟 Turn 엔티티 세팅
+            // 🔟 Turn 엔티티 세팅 (저장)
             turn.setAnswerAudioDurationSec(durationInt);
-            turn.setAudioMetricsJson(objectMapper.writeValueAsString(metrics));
+
+            turn.setAudioMetricsJson(objectMapper.writeValueAsString(audioMetrics));
+            turn.setPythonMetricsJson(pythonMetrics == null ? null : objectMapper.writeValueAsString(pythonMetrics));
 
             turn.setSttText(sttText);
             turn.setSttStatus(SttStatus.SUCCESS);
             turn.setSttCompletedAt(LocalDateTime.now());
 
+            // ✅ 1) tremorRiskScore 계산 → audio_scores_json 저장
+            String scoresJson = audioScoreService.buildAudioScoresJson(turn);
+            turn.setAudioScoresJson(scoresJson);
+
+            // ✅ save는 한 번만
             turnRepository.save(turn);
 
             return toResponse(turn, null, nextPath(turn.getTurnId()));
@@ -178,5 +200,20 @@ public class TurnSttService {
 
     private String nextPath(Long turnId) {
         return "/interview/" + turnId + "/result";
+    }
+
+    private Double getDoublePath(JsonNode root, String path) {
+        if (root == null || root.isNull() || path == null || path.isBlank()) return null;
+
+        JsonNode cur = root;
+        String[] parts = path.split("\\.");
+        for (String p : parts) {
+            if (cur == null) return null;
+            cur = cur.get(p);
+        }
+        if (cur == null || cur.isNull()) return null;
+
+        // 숫자 문자열로 올 수도 있으니 asDouble 사용
+        return cur.asDouble();
     }
 }
