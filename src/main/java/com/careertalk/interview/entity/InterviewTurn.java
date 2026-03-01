@@ -70,4 +70,10 @@ public class InterviewTurn {
 
     @Column(name="audio_metrics_json", columnDefinition="JSON")
     private String audioMetricsJson;
+
+    @Column(name = "python_metrics_json", columnDefinition = "json") // TEXT면 columnDefinition 지워도 됨
+    private String pythonMetricsJson;
+
+    @Column(name = "audio_scores_json", columnDefinition = "json")
+    private String audioScoresJson;
 }
