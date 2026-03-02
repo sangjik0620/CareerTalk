@@ -37,4 +37,28 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
             @Param("nextActions") String nextActions,
             @Param("resultJson") String resultJson
     );
+    // 상태 조회
+    @Query(value = """
+    SELECT analysis_status
+    FROM interview_evaluations
+    WHERE session_id = :sessionId
+    """, nativeQuery = true)
+    String findAnalysisStatusBySessionId(@Param("sessionId") Long sessionId);
+
+    // 상태 업데이트
+    @Modifying
+    @Transactional
+    @Query(value = """
+    UPDATE interview_evaluations
+    SET analysis_status = :status,
+        analysis_started_at = CASE WHEN :status = 'PROCESSING' THEN NOW() ELSE analysis_started_at END,
+        analysis_completed_at = CASE WHEN :status IN ('DONE','FAILED') THEN NOW() ELSE analysis_completed_at END,
+        analysis_error_message = :errorMessage
+    WHERE session_id = :sessionId
+    """, nativeQuery = true)
+    int updateAnalysisStatus(
+            @Param("sessionId") Long sessionId,
+            @Param("status") String status,
+            @Param("errorMessage") String errorMessage
+    );
 }
