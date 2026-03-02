@@ -34,4 +34,31 @@ public class ScoreNormalizer {
     public static double round2(double v) {
         return Math.round(v * 100.0) / 100.0;
     }
+
+    public static double linearClamp(double x, double min, double max) {
+        if (Double.isNaN(x) || Double.isInfinite(x)) return 0.5;
+        if (max <= min) return 0.5;
+        if (x <= min) return 0.0;
+        if (x >= max) return 1.0;
+        return (x - min) / (max - min);
+    }
+
+    /**
+     * 밴드패스: [low, high] 구간은 1.0에 가깝고
+     * low보다 작거나 high보다 크면 선형으로 0에 수렴.
+     */
+    public static double bandPass(double x, double low, double high, double outerLow, double outerHigh) {
+        if (Double.isNaN(x) || Double.isInfinite(x)) return 0.5;
+        if (outerLow >= low || outerHigh <= high) return 0.5;
+
+        if (x >= low && x <= high) return 1.0;
+
+        if (x < low) {
+            // outerLow -> 0, low -> 1
+            return clamp01(linearClamp(x, outerLow, low));
+        } else {
+            // high -> 1, outerHigh -> 0
+            return clamp01(1.0 - linearClamp(x, high, outerHigh));
+        }
+    }
 }
