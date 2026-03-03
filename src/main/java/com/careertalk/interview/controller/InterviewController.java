@@ -2,6 +2,7 @@ package com.careertalk.interview.controller;
 
 import com.careertalk.interview.dto.InterviewResultResponse;
 import com.careertalk.interview.dto.InterviewSessionResultResponse;
+import com.careertalk.interview.dto.SessionTargetRequest;
 import com.careertalk.interview.service.InterviewEvaluationService;
 import com.careertalk.interview.service.InterviewResultService;
 import com.careertalk.interview.service.InterviewService;
@@ -28,20 +29,27 @@ public class InterviewController {
             @RequestParam("files") List<MultipartFile> files,
             @RequestParam("questions") List<String> questions,
             @RequestParam("durationSec") int durationSec,
-            @RequestParam("questionCount") int questionCount
+            @RequestParam("questionCount") int questionCount,
+            @RequestParam(value = "targetsJson", required = false) String targetsJson
     ) throws IOException {
 
-        // TODO: 로그인 붙으면 SecurityContext/JWT에서 userId 가져오기
         Long userId = 1L;
+
+        List<SessionTargetRequest> targets = java.util.Collections.emptyList();
+        if (targetsJson != null && !targetsJson.isBlank()) {
+            var om = new com.fasterxml.jackson.databind.ObjectMapper();
+            var typeRef = new com.fasterxml.jackson.core.type.TypeReference<List<SessionTargetRequest>>() {};
+            targets = om.readValue(targetsJson, typeRef);
+        }
 
         Long sessionId = interviewService.saveInterviewVoice(
                 userId, files, questions, durationSec, questionCount
         );
 
-        return ResponseEntity.ok(Map.of(
-                "sessionId", sessionId,
-                "message", "업로드 성공"
-        ));
+        // 분리한 메서드로 targets 저장
+        interviewService.saveSessionTargets(sessionId, targets);
+
+        return ResponseEntity.ok(Map.of("sessionId", sessionId, "message", "업로드 성공"));
     }
 
     @GetMapping("/sessions/{sessionId}/result")

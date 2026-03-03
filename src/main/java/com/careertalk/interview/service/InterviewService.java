@@ -6,13 +6,16 @@ import com.careertalk.file.s3.S3PresignedUrlService;
 import com.careertalk.file.s3.S3Uploader;
 import com.careertalk.interview.dto.InterviewSessionResultResponse;
 import com.careertalk.interview.entity.InterviewSession;
+import com.careertalk.interview.entity.InterviewSessionTarget;
 import com.careertalk.interview.entity.InterviewTurn;
 import com.careertalk.interview.repository.InterviewSessionRepository;
+import com.careertalk.interview.repository.InterviewSessionTargetRepository;
 import com.careertalk.interview.repository.InterviewTurnRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+import com.careertalk.interview.dto.SessionTargetRequest;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -28,6 +31,8 @@ public class InterviewService {
     private final FileRepository fileRepository;
     private final S3Uploader s3Uploader;
     private final S3PresignedUrlService presignedUrlService;
+    private final InterviewSessionTargetRepository sessionTargetRepository;
+
 
     @Transactional
     public Long saveInterviewVoice(
@@ -147,6 +152,37 @@ public class InterviewService {
                 session.getMode(),
                 items
         );
+    }
+
+    @Transactional
+    public void saveSessionTargets(Long sessionId, List<SessionTargetRequest> targets) {
+        if (sessionId == null) throw new IllegalArgumentException("sessionId is null");
+        if (targets == null || targets.isEmpty()) return;
+
+        for (SessionTargetRequest t : targets) {
+            if (t == null) continue;
+            if (t.getTargetType() == null || t.getTargetId() == null) continue;
+
+            if (t.getAnalysisId() == null) {
+                throw new IllegalArgumentException("analysisId is required for targetType=" + t.getTargetType());
+            }
+
+            var existingOpt = sessionTargetRepository.findBySessionIdAndTargetType(sessionId, t.getTargetType());
+            if (existingOpt.isPresent()) {
+                var existing = existingOpt.get();
+                existing.setTargetId(t.getTargetId());
+                existing.setAnalysisId(t.getAnalysisId());
+                sessionTargetRepository.save(existing);
+            } else {
+                var entity = new InterviewSessionTarget(
+                        sessionId,
+                        t.getTargetType(),
+                        t.getTargetId(),
+                        t.getAnalysisId()
+                );
+                sessionTargetRepository.save(entity);
+            }
+        }
     }
 
     private static byte[] sha256Bytes(String v) {
