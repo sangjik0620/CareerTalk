@@ -34,7 +34,7 @@ public class PortfolioAnalysisController {
 
         log.info("재분석 요청 들어옴 - 포트폴리오 ID: {}", portfolioId);
 
-        // 서비스의 reanalyze 메서드 호출!
+        // reanalyze 메서드 호출
         PortfolioAnalysisResponse response = portfolioAnalysisService.reanalyze(portfolioId);
 
         return ResponseEntity.ok(response);
@@ -45,7 +45,7 @@ public class PortfolioAnalysisController {
             @PathVariable("analysisId") Long analysisId) {
 
 
-        // 방금 만든 Service 메서드 호출!
+
         PortfolioAnalysisResponse response = portfolioAnalysisService.getAnalysisResult(analysisId);
 
         return ResponseEntity.ok(response);

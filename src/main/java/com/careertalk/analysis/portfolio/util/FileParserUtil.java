@@ -25,7 +25,7 @@ import java.util.List;
 @Component
 public class FileParserUtil {
 
-    // (기존 코드 유지) 텍스트 추출 로직
+    // 텍스트 추출 로직
     public String extractText(MultipartFile file) {
         String fileName = file.getOriginalFilename();
         if (fileName == null) return "";
@@ -60,7 +60,7 @@ public class FileParserUtil {
         }
     }
 
-    // ⭐ 30장 제한(족쇄) 완전 삭제! 몇 장이 들어오든 전부 변환하도록 수정
+    //  몇 장이 들어오든 전부 변환하도록 수정
     public List<String> extractImagesAsBase64(MultipartFile file) {
         List<String> base64Images = new ArrayList<>();
         String fileName = file.getOriginalFilename();
@@ -72,7 +72,7 @@ public class FileParserUtil {
             if (fileName.endsWith(".pdf")) {
                 try (PDDocument document = PDDocument.load(file.getInputStream())) {
                     PDFRenderer pdfRenderer = new PDFRenderer(document);
-                    int pages = document.getNumberOfPages(); // ⭐ 파일의 전체 페이지 수를 끝까지 다 돕니다.
+                    int pages = document.getNumberOfPages(); //  파일의 전체 페이지 수를 끝까지 다 돕니다.
                     for (int i = 0; i < pages; i++) {
                         // 50 DPI로 아주 흐릿하고 용량 작게 캡처 (비용/속도 최적화)
                         BufferedImage bim = pdfRenderer.renderImageWithDPI(i, 50);
@@ -86,7 +86,7 @@ public class FileParserUtil {
                     int width = (int) (pgsize.width * scale);
                     int height = (int) (pgsize.height * scale);
 
-                    int pages = ppt.getSlides().size(); // ⭐ PPTX도 슬라이드 끝까지 다 돕니다.
+                    int pages = ppt.getSlides().size();
                     for (int i = 0; i < pages; i++) {
                         XSLFSlide slide = ppt.getSlides().get(i);
                         BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
@@ -108,7 +108,7 @@ public class FileParserUtil {
         ImageIO.write(img, "png", baos);
         return Base64.getEncoder().encodeToString(baos.toByteArray());
     }
-    // ⭐ [신규 추가] S3에서 다운받은 InputStream용 이미지 추출 로직 (재분석용)
+    //  S3에서 다운받은 InputStream용 이미지 추출 로직 (재분석용)
     public List<String> extractImagesAsBase64FromStream(java.io.InputStream inputStream, String fileName) {
         List<String> base64Images = new ArrayList<>();
         if (fileName == null) return base64Images;
