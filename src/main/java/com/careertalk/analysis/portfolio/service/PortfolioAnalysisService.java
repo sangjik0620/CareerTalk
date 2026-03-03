@@ -120,42 +120,6 @@ public class PortfolioAnalysisService {
         return processAndSaveAiResult(aiResultJson, currentUserId, portfolio.getPortfolioId(), jobCategory);
     }
 
-    @Transactional
-    public PortfolioAnalysisResponse reanalyze(Long portfolioId) {
-
-        PortfolioEntity portfolio = portfolioRepository.findById(portfolioId)
-                .orElseThrow(() -> new RuntimeException("포트폴리오 정보를 찾을 수 없습니다."));
-
-        String savedText = portfolio.getExtractedText();
-        Long fileId = portfolio.getFileId(); // 저장해둔 fileId 꺼내기
-
-        AnalysisEntity lastAnalysis = analysisRepository.findFirstByTargetIdOrderByAnalysisIdDesc(portfolioId)
-                .orElseThrow(() -> new RuntimeException("이전 분석 기록을 찾을 수 없습니다."));
-        String jobCategory = lastAnalysis.getTargetJob();
-
-        //  1. FileEntity에서 정확한 필드(getS3Key)로 경로 가져오기
-        FileEntity fileEntity = fileRepository.findById(fileId)
-                .orElseThrow(() -> new RuntimeException("원본 파일 정보를 찾을 수 없습니다."));
-        String s3Key = fileEntity.getS3Key();
-
-        //  2. S3에서 파일 다운로드 및 이미지 다시 추출
-        List<String> base64Images = new ArrayList<>();
-        try (java.io.InputStream fileStream = s3Service.downloadFile(s3Key)) {
-            base64Images = fileParserUtil.extractImagesAsBase64FromStream(fileStream, portfolio.getTitle());
-            log.info("S3에서 파일을 불러와 재분석용 이미지를 추출했습니다.");
-        } catch (Exception e) {
-            log.error("재분석용 S3 파일 추출 실패 (텍스트로만 진행합니다)", e);
-        }
-
-        String systemPrompt = getSystemPrompt();
-        String userPrompt = "지원 직무: " + jobCategory + "\n\n포트폴리오 내용:\n" + savedText;
-
-        log.info("포트폴리오 ID: {} 재분석을 시작합니다...", portfolioId);
-        String newAiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, base64Images);
-        log.info("AI 재분석 완료!");
-
-        return processAndSaveAiResult(newAiResultJson, portfolio.getUserId(), portfolioId, jobCategory);
-    }
 
     @Transactional(readOnly = true)
     public PortfolioAnalysisResponse getAnalysisResult(Long analysisId) {
@@ -195,7 +159,7 @@ public class PortfolioAnalysisService {
             String scoreJsonStr = rootNode.get("scoreJson").toString();
             String questionsJsonStr = rootNode.get("expectedQuestionsJson").toString();
 
-            // ⭐ 테이블 구조에 맞춰 모든 필드를 꼼꼼하게 채워줍니다.
+            //  테이블 구조에 맞춰 모든 필드를 꼼꼼하게 채워줍니다.
             AnalysisEntity analysis = AnalysisEntity.builder()
                     .userId(userId)
                     .targetType("PORTFOLIO")
