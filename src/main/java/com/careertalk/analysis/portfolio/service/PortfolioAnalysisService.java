@@ -51,7 +51,7 @@ public class PortfolioAnalysisService {
     private final S3Service s3Service;
     private final FileRepository fileRepository;
 
-    @Value("${aws.s3.bucket}") // application.yml에 있는 버킷명 가져오기
+    @Value("${aws.s3.bucket}")
     private String s3BucketName;
 
     @Value("classpath:prompts/portfolio-analysis-prompt.txt")
@@ -70,7 +70,7 @@ public class PortfolioAnalysisService {
             throw new RuntimeException("S3 파일 업로드에 실패했습니다.", e);
         }
 
-        // ⭐ 2. 보여주신 FileEntity 구조에 맞춰 DB에 저장 (s3KeyHash 생성 포함)
+        //  2. FileEntity 구조에 맞춰 DB에 저장 (s3KeyHash 생성 포함)
         Long realFileId;
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -133,12 +133,12 @@ public class PortfolioAnalysisService {
                 .orElseThrow(() -> new RuntimeException("이전 분석 기록을 찾을 수 없습니다."));
         String jobCategory = lastAnalysis.getTargetJob();
 
-        // ⭐ 1. FileEntity에서 정확한 필드(getS3Key)로 경로 가져오기
+        //  1. FileEntity에서 정확한 필드(getS3Key)로 경로 가져오기
         FileEntity fileEntity = fileRepository.findById(fileId)
                 .orElseThrow(() -> new RuntimeException("원본 파일 정보를 찾을 수 없습니다."));
         String s3Key = fileEntity.getS3Key();
 
-        // ⭐ 2. S3에서 파일 다운로드 및 이미지 다시 추출
+        //  2. S3에서 파일 다운로드 및 이미지 다시 추출
         List<String> base64Images = new ArrayList<>();
         try (java.io.InputStream fileStream = s3Service.downloadFile(s3Key)) {
             base64Images = fileParserUtil.extractImagesAsBase64FromStream(fileStream, portfolio.getTitle());
@@ -206,9 +206,8 @@ public class PortfolioAnalysisService {
                     .expectedQuestionsJson(questionsJsonStr)
                     .oneLineReview(oneLineReview)
                     .summaryDetail(summaryDetail)
-                    // --- 여기서부터 추가/수정 (NULL 방지) ---
                     .status("SUCCESS")
-                    .modelName("gpt-4o") // 사용 중인 모델명
+                    .modelName("gpt-4.1-nano") // 사용 중인 모델명
                     .modelVersion("2024-05-13") // 모델 버전
                     .promptVersion("v1.0") // 프롬프트 버전 관리용
                     .analyzedAt(java.time.LocalDateTime.now()) // 분석 완료 시점
