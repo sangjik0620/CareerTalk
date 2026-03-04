@@ -57,6 +57,15 @@ public class PortfolioAnalysisService {
     @Value("classpath:prompts/portfolio-analysis-prompt.txt")
     private Resource systemPromptResource;
 
+    @Value("${ai.model.name}")
+    private String aiModelName;
+
+    @Value("${ai.model.version}")
+    private String aiModelVersion;
+
+    @Value("${ai.prompt.version}")
+    private String aiPromptVersion;
+
     @Transactional
     public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String jobCategory, String detailedPosition) {
 
@@ -159,7 +168,6 @@ public class PortfolioAnalysisService {
             String scoreJsonStr = rootNode.get("scoreJson").toString();
             String questionsJsonStr = rootNode.get("expectedQuestionsJson").toString();
 
-            //  테이블 구조에 맞춰 모든 필드를 꼼꼼하게 채워줍니다.
             AnalysisEntity analysis = AnalysisEntity.builder()
                     .userId(userId)
                     .targetType("PORTFOLIO")
@@ -171,9 +179,9 @@ public class PortfolioAnalysisService {
                     .oneLineReview(oneLineReview)
                     .summaryDetail(summaryDetail)
                     .status("SUCCESS")
-                    .modelName("gpt-4.1-nano") // 사용 중인 모델명
-                    .modelVersion("2024-05-13") // 모델 버전
-                    .promptVersion("v1.0") // 프롬프트 버전 관리용
+                    .modelName(aiModelName)
+                    .modelVersion(aiModelVersion)
+                    .promptVersion(aiPromptVersion)
                     .analyzedAt(java.time.LocalDateTime.now()) // 분석 완료 시점
                     .build();
 
