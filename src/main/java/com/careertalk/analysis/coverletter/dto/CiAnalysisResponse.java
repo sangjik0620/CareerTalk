@@ -1,22 +1,24 @@
 package com.careertalk.analysis.coverletter.dto;
 
 import lombok.Builder;
-import lombok.Data;
+import lombok.Getter;
 
 import java.util.List;
 
-@Data
+@Getter
 @Builder
 public class CiAnalysisResponse {
+    private long analysisId;
 
-    private Long analysisId;
+    private String jobRole;
+    private String jobDetail;
 
     private String title;
     private String content;
 
-    private Integer ruleScore;
-    private Integer llmScore;
-    private Integer totalScore;
+    private int ruleScore;
+    private int llmScore;
+    private int totalScore;
 
     private String strengths;
     private String weaknesses;

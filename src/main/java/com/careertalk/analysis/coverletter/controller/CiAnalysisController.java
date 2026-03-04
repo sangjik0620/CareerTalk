@@ -2,9 +2,10 @@ package com.careertalk.analysis.coverletter.controller;
 
 import com.careertalk.analysis.coverletter.dto.CiAnalysisResponse;
 import com.careertalk.analysis.coverletter.dto.CiAnalyzeTextRequest;
+import com.careertalk.analysis.coverletter.dto.CiRewriteRequest;
+import com.careertalk.analysis.coverletter.dto.CiRewriteResponse;
 import com.careertalk.analysis.coverletter.service.CiAnalysisService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -17,9 +18,7 @@ public class CiAnalysisController {
     private final CiAnalysisService ciAnalysisService;
 
     @PostMapping("/analyze/text")
-    public CiAnalysisResponse analyzeText(
-            @RequestBody CiAnalyzeTextRequest req) {
-
+    public CiAnalysisResponse analyzeText(@RequestBody CiAnalyzeTextRequest req) {
         return ciAnalysisService.analyzeFromText(req);
     }
 
@@ -30,5 +29,10 @@ public class CiAnalysisController {
             @RequestParam(value = "jobDetail", required = false) String jobDetail
     ) {
         return ciAnalysisService.analyzeFromPdf(file, jobRole, jobDetail);
+    }
+
+    @PostMapping("/rewrite")
+    public CiRewriteResponse rewrite(@RequestBody CiRewriteRequest req) {
+        return ciAnalysisService.rewriteFromText(req);
     }
 }
