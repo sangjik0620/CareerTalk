@@ -41,20 +41,33 @@ public class AudioScoreService {
             Integer wordCount    = getInt(audioNode, "wordCount");
 
             // ===== python_metrics_json =====
-            // ✅ 1) python_metrics_json이 flat 구조인 경우 (추천)
-            Double pitchMean     = getDouble(pyNode, "pitchMean");
-            Double pitchStd      = getDouble(pyNode, "pitchStd");
-            Double pitchCv       = getDouble(pyNode, "pitchCv");
-            Double jitterLocal   = getDouble(pyNode, "jitterLocal");
-            Double shimmerLocal  = getDouble(pyNode, "shimmerLocal");
+            // python_metrics_json 포맷 호환:
+            // 1) wrapper: { version, extracted:{...}, raw:{...} }
+            // 2) flat: { pitchMean, pitchStd, pitchCv, jitterLocal, shimmerLocal, ... }
+            // 3) raw nested: { pitch:{pitchMeanHz,...}, voiceQuality:{...}, durationSec }
+            JsonNode extractedNode = (pyNode != null) ? pyNode.get("extracted") : null;
+            JsonNode rawNode = (pyNode != null) ? pyNode.get("raw") : null;
 
-            // ✅ 2) python_metrics_json이 nested 구조인 경우(네가 FastAPI raw 응답처럼 저장한 경우)
-            //    pitch: { pitchMeanHz, pitchStdHz, pitchCv }, voiceQuality: { jitterLocal, shimmerLocal }
-            if (pitchMean == null) pitchMean = getDoubleNested(pyNode, "pitch", "pitchMeanHz");
-            if (pitchStd  == null) pitchStd  = getDoubleNested(pyNode, "pitch", "pitchStdHz");
-            if (pitchCv   == null) pitchCv   = getDoubleNested(pyNode, "pitch", "pitchCv");
-            if (jitterLocal == null) jitterLocal = getDoubleNested(pyNode, "voiceQuality", "jitterLocal");
-            if (shimmerLocal == null) shimmerLocal = getDoubleNested(pyNode, "voiceQuality", "shimmerLocal");
+            // 1) extracted 우선
+            Double pitchMean     = getDouble(extractedNode, "pitchMean");
+            Double pitchStd      = getDouble(extractedNode, "pitchStd");
+            Double pitchCv       = getDouble(extractedNode, "pitchCv");
+            Double jitterLocal   = getDouble(extractedNode, "jitterLocal");
+            Double shimmerLocal  = getDouble(extractedNode, "shimmerLocal");
+
+            // 2) flat fallback
+            if (pitchMean == null) pitchMean = getDouble(pyNode, "pitchMean");
+            if (pitchStd  == null) pitchStd  = getDouble(pyNode, "pitchStd");
+            if (pitchCv   == null) pitchCv   = getDouble(pyNode, "pitchCv");
+            if (jitterLocal == null) jitterLocal = getDouble(pyNode, "jitterLocal");
+            if (shimmerLocal == null) shimmerLocal = getDouble(pyNode, "shimmerLocal");
+
+            // 3) raw nested fallback (FastAPI 원본)
+            if (pitchMean == null) pitchMean = getDoubleNested(rawNode, "pitch", "pitchMeanHz");
+            if (pitchStd  == null) pitchStd  = getDoubleNested(rawNode, "pitch", "pitchStdHz");
+            if (pitchCv   == null) pitchCv   = getDoubleNested(rawNode, "pitch", "pitchCv");
+            if (jitterLocal == null) jitterLocal = getDoubleNested(rawNode, "voiceQuality", "jitterLocal");
+            if (shimmerLocal == null) shimmerLocal = getDoubleNested(rawNode, "voiceQuality", "shimmerLocal");
 
             // ===== 1) Tremor =====
             TremorScoreResult tremor = tremorRiskScorer.score(
@@ -87,7 +100,6 @@ public class AudioScoreService {
             );
 
             // ===== 4) Overall =====
-            // overall은 tremor + confidence 기반으로 계산 (원하면 fluency 반영 버전도 가능)
             OverallVoiceScoreResult overall = overallVoiceScorer.score(
                     tremor.getTremorRiskScore(),
                     tremor.getAnalysisReliability(),
@@ -95,7 +107,7 @@ public class AudioScoreService {
                     confidence.getAnalysisReliability()
             );
 
-            // ===== 5) Feedback (overall + 각 점수 기반 자동 문장 생성) =====
+            // ===== 5) Feedback =====
             VoiceFeedbackResult feedback = voiceFeedbackGenerator.generate(
                     overall.getOverallVoiceScore(),
                     overall.getGrade(),

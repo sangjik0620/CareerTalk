@@ -165,18 +165,70 @@ public class TurnSttService {
 
             // python_metrics_json: extracted + raw(권장)
             Map<String, Object> pythonMetricsWrapper = null;
-            if (pyRaw != null && !pyRaw.isNull()) {
-                Map<String, Object> extracted = new LinkedHashMap<>();
-                extracted.put("pitchMean", getDoublePath(pyRaw, "pitch.mean"));
-                extracted.put("pitchStd",  getDoublePath(pyRaw, "pitch.std"));
-                extracted.put("pitchCv",   getDoublePath(pyRaw, "pitch.cv"));
-                extracted.put("jitterLocal",  getDoublePath(pyRaw, "voiceQuality.jitterLocal"));
-                extracted.put("shimmerLocal", getDoublePath(pyRaw, "voiceQuality.shimmerLocal"));
-                extracted.put("durationSec", getDoublePath(pyRaw, "durationSec"));
 
+            if (pyRaw != null && !pyRaw.isNull()) {
+
+                // 1) FastAPI 응답이 "raw 자체가 wrapper"일 수도 있고 (이미 raw/extracted/version이 있을 수도 있음)
+                //    보통은 raw가 곧 pitch/voiceQuality 구조임.
+                //    여기서는 "pyRaw가 pitch를 직접 들고 있다"는 전제 + fallback까지 지원.
+
+                // ✅ pitch 경로 후보들 (FastAPI 버전/키가 바뀌어도 최대한 살아남게)
+                Double pitchMean = firstNonNull(
+                        getDoublePath(pyRaw, "pitch.pitchMeanHz"),
+                        getDoublePath(pyRaw, "pitch.pitchMean"),
+                        getDoublePath(pyRaw, "pitch.mean"),
+                        getDoublePath(pyRaw, "pitchMeanHz"),
+                        getDoublePath(pyRaw, "pitchMean")
+                );
+
+                Double pitchStd = firstNonNull(
+                        getDoublePath(pyRaw, "pitch.pitchStdHz"),
+                        getDoublePath(pyRaw, "pitch.pitchStd"),
+                        getDoublePath(pyRaw, "pitch.std"),
+                        getDoublePath(pyRaw, "pitchStdHz"),
+                        getDoublePath(pyRaw, "pitchStd")
+                );
+
+                Double pitchCv = firstNonNull(
+                        getDoublePath(pyRaw, "pitch.pitchCv"),
+                        getDoublePath(pyRaw, "pitch.cv"),
+                        getDoublePath(pyRaw, "pitchCv"),
+                        getDoublePath(pyRaw, "pitchCV")
+                );
+
+                // ✅ voiceQuality 경로 후보
+                Double jitterLocal = firstNonNull(
+                        getDoublePath(pyRaw, "voiceQuality.jitterLocal"),
+                        getDoublePath(pyRaw, "voice_quality.jitterLocal"),
+                        getDoublePath(pyRaw, "jitterLocal")
+                );
+
+                Double shimmerLocal = firstNonNull(
+                        getDoublePath(pyRaw, "voiceQuality.shimmerLocal"),
+                        getDoublePath(pyRaw, "voice_quality.shimmerLocal"),
+                        getDoublePath(pyRaw, "shimmerLocal")
+                );
+
+                Double pyDurationSec = firstNonNull(
+                        getDoublePath(pyRaw, "durationSec"),
+                        getDoublePath(pyRaw, "duration_sec")
+                );
+
+                Map<String, Object> extracted = new LinkedHashMap<>();
+                extracted.put("durationSec", pyDurationSec);
+                extracted.put("pitchMeanHz", pitchMean);
+                extracted.put("pitchStdHz", pitchStd);
+                extracted.put("pitchCv", pitchCv);
+                extracted.put("jitterLocal", jitterLocal);
+                extracted.put("shimmerLocal", shimmerLocal);
+
+                // ✅ 스키마 고정을 위한 wrapper
                 pythonMetricsWrapper = new LinkedHashMap<>();
+                pythonMetricsWrapper.put("schema", "careertalk.python_metrics.v1");
                 pythonMetricsWrapper.put("version", "PYMET-1.0");
                 pythonMetricsWrapper.put("extracted", extracted);
+
+                // ✅ 원본은 그대로 저장 (디버깅/회귀 분석에 매우 유리)
                 pythonMetricsWrapper.put("raw", objectMapper.convertValue(pyRaw, Map.class));
             }
 
@@ -262,5 +314,13 @@ public class TurnSttService {
         if (cur == null || cur.isNull()) return null;
 
         return cur.asDouble();
+    }
+
+    private Double firstNonNull(Double... values) {
+        if (values == null) return null;
+        for (Double v : values) {
+            if (v != null) return v;
+        }
+        return null;
     }
 }
