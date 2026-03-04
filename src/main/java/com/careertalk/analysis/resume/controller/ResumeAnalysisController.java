@@ -34,6 +34,17 @@ public class ResumeAnalysisController {
     }
 
     /**
+     * ⭐ 추가: 분석 결과 조회 (Portfolio와 동일한 패턴)
+     * GET /api/resumes/{analysisId}/result
+     */
+    @GetMapping("/{analysisId}/result")
+    public ResponseEntity<ResumeAnalysisResponse> getResumeResult(
+            @PathVariable("analysisId") Long analysisId) {
+        ResumeAnalysisResponse response = resumeService.getAnalysisResult(analysisId);
+        return ResponseEntity.ok(response);
+    }
+
+    /**
      * resumes(resumeId) -> files(fileId) -> S3 -> DOCX 파싱 텍스트 반환
      * GET /api/resumes/{resumeId}/parsed-text
      */

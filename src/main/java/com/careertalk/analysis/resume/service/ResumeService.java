@@ -58,6 +58,16 @@ public class ResumeService {
     @Value("classpath:prompts/resume-analysis-prompt.txt")
     private Resource systemPromptResource;
 
+    // ⭐ 추가: Portfolio와 동일하게 @Value로 주입
+    @Value("${ai.model.name}")
+    private String aiModelName;
+
+    @Value("${ai.model.version}")
+    private String aiModelVersion;
+
+    @Value("${ai.prompt.version}")
+    private String aiPromptVersion;
+
     // ──────────────────────────────────────────────
     // POST /api/resumes/analyze
     // ──────────────────────────────────────────────
@@ -124,13 +134,29 @@ public class ResumeService {
                 .replace("{{DOCX에서 추출된 텍스트}}", extractedText);
 
         log.info("AI 이력서 분석 시작... (직군: {}, 포지션: {})", jobCategory, detailedPosition);
-        // 이력서는 이미지 없음 → null 전달
         String aiResultJson = openAiService.getAiResponse(systemPrompt, "", null);
         log.info("AI 이력서 분석 완료!");
 
         // 7. 분석 결과 저장 및 DTO 반환
         return processAndSaveAiResult(
                 aiResultJson, currentUserId, resume.getResumeId(), jobCategory, detailedPosition);
+    }
+
+    // ──────────────────────────────────────────────
+    // GET /api/resumes/{analysisId}/result  ⭐ 추가
+    // ──────────────────────────────────────────────
+    @Transactional(readOnly = true)
+    public ResumeAnalysisResponse getAnalysisResult(Long analysisId) {
+        AnalysisEntity analysis = analysisRepository.findById(analysisId)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND, "해당 이력서의 분석 결과를 찾을 수 없습니다."));
+        try {
+            // detailedPosition은 AnalysisEntity에 별도 저장하지 않으므로 null 전달
+            return convertToResponseDto(analysis, null);
+        } catch (JsonProcessingException e) {
+            log.error("JSON 파싱 에러", e);
+            throw new RuntimeException("분석 결과를 불러오는 중 오류가 발생했습니다.");
+        }
     }
 
     // ──────────────────────────────────────────────
@@ -203,13 +229,11 @@ public class ResumeService {
         try {
             JsonNode root = objectMapper.readTree(aiResultJson);
 
-            int overallScore           = root.get("overallScore").asInt();
-            String summaryDetail       = root.get("summaryDetail").asText();
-            String detailedEvalJson    = root.get("detailedEvaluation").toString();   // ruleResultJson에 저장
+            int overallScore             = root.get("overallScore").asInt();
+            String summaryDetail         = root.get("summaryDetail").asText();       // 한줄 총평
+            String detailedEvalJson      = root.get("detailedEvaluation").toString(); // 항목별 점수 → scoreJson
             String expectedQuestionsJson = root.get("expectedQuestionsJson").toString();
-            String strengthsJson       = root.get("strengths").toString();
-            String weaknessesJson      = root.get("weaknesses").toString();
-            String improvementsJson    = root.get("improvements").toString();
+            String feedbackJson          = root.get("feedback").toString();
 
             AnalysisEntity analysis = AnalysisEntity.builder()
                     .userId(userId)
@@ -217,16 +241,14 @@ public class ResumeService {
                     .targetId(resumeId)
                     .targetJob(jobCategory)
                     .overallScore(overallScore)
-                    .ruleResultJson(detailedEvalJson)       // 항목별 상세 평가 저장
-                    .scoreJson(strengthsJson)               // 강점 저장 (scoreJson 재활용)
-                    .summaryDetail(summaryDetail)
+                    .oneLineReview(summaryDetail)   // ⭐ 한줄 총평 → oneLineReview
+                    .scoreJson(detailedEvalJson)    // ⭐ 항목별 점수 → scoreJson
+                    .ruleResultJson(feedbackJson)   // ⭐ 강점/약점/개선점 묶음 → ruleResultJson
                     .expectedQuestionsJson(expectedQuestionsJson)
-                    .oneLineReview(weaknessesJson)          // 약점 저장 (oneLineReview 재활용)
-                    .errorMessage(improvementsJson)         // 개선방안 저장 (errorMessage 재활용)
                     .status("SUCCESS")
-                    .modelName("gpt-4o")
-                    .modelVersion("2024-05-13")
-                    .promptVersion("v1.0")
+                    .modelName(aiModelName)
+                    .modelVersion(aiModelVersion)
+                    .promptVersion(aiPromptVersion)
                     .analyzedAt(LocalDateTime.now())
                     .build();
 
@@ -243,8 +265,8 @@ public class ResumeService {
     private ResumeAnalysisResponse convertToResponseDto(
             AnalysisEntity analysis, String detailedPosition) throws JsonProcessingException {
 
-        // detailedEvaluation 파싱
-        JsonNode evalNode = objectMapper.readTree(analysis.getRuleResultJson());
+        // ⭐ scoreJson → detailedEvaluation 파싱
+        JsonNode evalNode = objectMapper.readTree(analysis.getScoreJson());
         DetailedEvaluationDto detailedEvaluation = DetailedEvaluationDto.builder()
                 .jobFitScore(parseEvalItem(evalNode.get("jobFitScore")))
                 .experienceScore(parseEvalItem(evalNode.get("experienceScore")))
@@ -253,10 +275,11 @@ public class ResumeService {
                 .completenessScore(parseEvalItem(evalNode.get("completenessScore")))
                 .build();
 
-        // strengths / weaknesses / improvements 파싱
-        List<String> strengths    = objectMapper.readValue(analysis.getScoreJson(),    new TypeReference<>() {});
-        List<String> weaknesses   = objectMapper.readValue(analysis.getOneLineReview(), new TypeReference<>() {});
-        List<String> improvements = objectMapper.readValue(analysis.getErrorMessage(),  new TypeReference<>() {});
+        // ⭐ ruleResultJson → feedback 노드에서 바로 꺼내기
+        JsonNode feedbackNode = objectMapper.readTree(analysis.getRuleResultJson());
+        List<String> strengths    = objectMapper.readValue(feedbackNode.get("strengths").toString(),    new TypeReference<>() {});
+        List<String> weaknesses   = objectMapper.readValue(feedbackNode.get("weaknesses").toString(),   new TypeReference<>() {});
+        List<String> improvements = objectMapper.readValue(feedbackNode.get("improvements").toString(), new TypeReference<>() {});
 
         // expectedQuestionsJson 파싱
         List<QuestionDto> questions = objectMapper.readValue(
@@ -268,7 +291,7 @@ public class ResumeService {
                 .targetJob(analysis.getTargetJob())
                 .detailedPosition(detailedPosition)
                 .overallScore(analysis.getOverallScore())
-                .summaryDetail(analysis.getSummaryDetail())
+                .summaryDetail(analysis.getOneLineReview()) // ⭐ oneLineReview에서 꺼내서 DTO의 summaryDetail로
                 .detailedEvaluation(detailedEvaluation)
                 .strengths(strengths)
                 .weaknesses(weaknesses)

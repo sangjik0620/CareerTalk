@@ -1,3 +1,92 @@
+private ResumeAnalysisResponse processAndSaveAiResult(
+        String aiResultJson, Long userId, Long resumeId,
+        String jobCategory, String detailedPosition) {
+    try {
+        JsonNode root = objectMapper.readTree(aiResultJson);
+
+        int overallScore             = root.get("overallScore").asInt();
+        String summaryDetail         = root.get("summaryDetail").asText();       // 한줄 총평
+        String detailedEvalJson      = root.get("detailedEvaluation").toString(); // 항목별 점수 → scoreJson
+        String expectedQuestionsJson = root.get("expectedQuestionsJson").toString();
+
+        // ⭐ strengths / weaknesses / improvements → 하나의 JSON으로 묶어서 ruleResultJson에 저장
+        String feedbackJson = objectMapper.writeValueAsString(Map.of(
+                "strengths",    objectMapper.readValue(root.get("strengths").toString(),    new TypeReference<List<String>>() {}),
+                "weaknesses",   objectMapper.readValue(root.get("weaknesses").toString(),   new TypeReference<List<String>>() {}),
+                "improvements", objectMapper.readValue(root.get("improvements").toString(), new TypeReference<List<String>>() {})
+        ));
+
+        AnalysisEntity analysis = AnalysisEntity.builder()
+                .userId(userId)
+                .targetType("RESUME")
+                .targetId(resumeId)
+                .targetJob(jobCategory)
+                .overallScore(overallScore)
+                .oneLineReview(summaryDetail)   // ⭐ 한줄 총평 → oneLineReview
+                .scoreJson(detailedEvalJson)    // ⭐ 항목별 점수 → scoreJson
+                .ruleResultJson(feedbackJson)   // ⭐ 강점/약점/개선점 묶음 → ruleResultJson
+                // summary_detail, error_message는 비움
+                .expectedQuestionsJson(expectedQuestionsJson)
+                .status("SUCCESS")
+                .modelName(aiModelName)
+                .modelVersion(aiModelVersion)
+                .promptVersion(aiPromptVersion)
+                .analyzedAt(LocalDateTime.now())
+                .build();
+
+        AnalysisEntity saved = analysisRepository.save(analysis);
+        return convertToResponseDto(saved, detailedPosition);
+
+    } catch (Exception e) {
+        log.error("AI 응답 결과 처리 중 에러 발생", e);
+        throw new RuntimeException("분석 결과를 저장하는 중 오류가 발생했습니다.");
+    }
+}
+
+private ResumeAnalysisResponse convertToResponseDto(
+        AnalysisEntity analysis, String detailedPosition) throws JsonProcessingException {
+
+    // ⭐ scoreJson → detailedEvaluation 파싱
+    JsonNode evalNode = objectMapper.readTree(analysis.getScoreJson());
+    DetailedEvaluationDto detailedEvaluation = DetailedEvaluationDto.builder()
+            .jobFitScore(parseEvalItem(evalNode.get("jobFitScore")))
+            .experienceScore(parseEvalItem(evalNode.get("experienceScore")))
+            .skillScore(parseEvalItem(evalNode.get("skillScore")))
+            .growthScore(parseEvalItem(evalNode.get("growthScore")))
+            .completenessScore(parseEvalItem(evalNode.get("completenessScore")))
+            .build();
+
+    // ⭐ ruleResultJson → strengths / weaknesses / improvements 파싱
+    JsonNode feedbackNode = objectMapper.readTree(analysis.getRuleResultJson());
+    List<String> strengths    = objectMapper.readValue(feedbackNode.get("strengths").toString(),    new TypeReference<>() {});
+    List<String> weaknesses   = objectMapper.readValue(feedbackNode.get("weaknesses").toString(),   new TypeReference<>() {});
+    List<String> improvements = objectMapper.readValue(feedbackNode.get("improvements").toString(), new TypeReference<>() {});
+
+    List<QuestionDto> questions = objectMapper.readValue(
+            analysis.getExpectedQuestionsJson(), new TypeReference<>() {});
+
+    return ResumeAnalysisResponse.builder()
+            .analysisId(analysis.getAnalysisId())
+            .resumeId(analysis.getTargetId())
+            .targetJob(analysis.getTargetJob())
+            .detailedPosition(detailedPosition)
+            .overallScore(analysis.getOverallScore())
+            .summaryDetail(analysis.getOneLineReview()) // ⭐ oneLineReview에서 꺼내서 DTO의 summaryDetail로
+            .detailedEvaluation(detailedEvaluation)
+            .strengths(strengths)
+            .weaknesses(weaknesses)
+            .improvements(improvements)
+            .expectedQuestionsJson(questions)
+            .createdAt(analysis.getAnalyzedAt()
+                    .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
+            .build();
+}
+```
+
+---
+
+## 2. `resume-analysis-prompt.txt` — strengths/weaknesses/improvements를 JSON 객체로 묶기
+```
 너는 대한민국 채용 시장에 최적화된 전문 채용 컨설턴트이자 HR 평가 전문가다.
 
 다음은 AI 자동 분석을 위해 구조화된 이력서이다.
@@ -79,19 +168,21 @@
       "evaluation": "구조는 정돈되어 있으나 일부 항목이 간략하다."
     }
   },
-  "strengths": [
-    "직무 관련 경험 보유",
-    "기본적인 기술 역량 확보",
-    "이력서 구조가 체계적임"
-  ],
-  "weaknesses": [
-    "성과 수치화 부족",
-    "경력 기술이 다소 추상적임"
-  ],
-  "improvements": [
-    "프로젝트 및 업무 성과를 수치화하여 작성",
-    "기술 숙련도를 구체적 사례와 함께 명시"
-  ],
+  "feedback": {
+    "strengths": [
+      "직무 관련 경험 보유",
+      "기본적인 기술 역량 확보",
+      "이력서 구조가 체계적임"
+    ],
+    "weaknesses": [
+      "성과 수치화 부족",
+      "경력 기술이 다소 추상적임"
+    ],
+    "improvements": [
+      "프로젝트 및 업무 성과를 수치화하여 작성",
+      "기술 숙련도를 구체적 사례와 함께 명시"
+    ]
+  },
   "expectedQuestionsJson": [
     {
       "q": "이전 프로젝트에서 가장 어려웠던 문제와 해결 과정을 설명해 주세요.",
