@@ -1,7 +1,9 @@
 package com.careertalk.analysis.coverletter.service;
 
-import com.careertalk.analysis.coverletter.dto.CiAnalysisResponse;
 import com.careertalk.analysis.coverletter.dto.CiAnalyzeTextRequest;
+import com.careertalk.analysis.coverletter.dto.CiAnalysisResponse;
+import com.careertalk.analysis.coverletter.dto.CiRewriteRequest;
+import com.careertalk.analysis.coverletter.dto.CiRewriteResponse;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -33,8 +35,7 @@ public class CiAnalysisService {
     @Value("${ai.api-url}")
     private String apiUrl;
 
-
-    //직국 별 전문성 키워드 맵
+    // 직군 별 전문성 키워드 맵
     private static final Map<String, List<String>> ROLE_KEYWORDS = Map.ofEntries(
             Map.entry("기획∙전략", List.of("전략", "로드맵", "OKR", "KPI", "PRD", "요구사항", "가설", "검증", "인사이트", "지표")),
             Map.entry("마케팅∙홍보∙조사", List.of("브랜딩", "캠페인", "SEO", "SEM", "ROAS", "CAC", "LTV", "전환", "리드", "GA4", "UTM")),
@@ -59,15 +60,12 @@ public class CiAnalysisService {
             Map.entry("공공∙복지", List.of("민원", "행정", "정책", "사업", "예산", "성과", "평가", "복지", "사례관리", "기관"))
     );
 
+    //분석
     public CiAnalysisResponse analyzeFromText(CiAnalyzeTextRequest req) {
         try {
-            // 룰 점수 40점
             int ruleScore = calcRuleScore(req.getJobRole(), req.getJobDetail(), req.getTitle(), req.getContent());
-
-            //llm 점수 60점
-            JsonNode resultNode = callOpenAi(req);
+            JsonNode resultNode = callOpenAiAnalyze(req);
             return toResponse(req, resultNode, ruleScore);
-
         } catch (Exception e) {
             throw new RuntimeException("분석 실패: " + e.getMessage(), e);
         }
@@ -80,8 +78,6 @@ public class CiAnalysisService {
             String extracted = extractTextFromPdf(file);
             if (extracted == null) extracted = "";
             extracted = extracted.trim();
-
-            // 너무 길면 LLM 토큰 폭발 방지(필요시 조절)
             extracted = limitLength(extracted, 12000);
 
             CiAnalyzeTextRequest req = new CiAnalyzeTextRequest();
@@ -91,19 +87,82 @@ public class CiAnalysisService {
             req.setContent(extracted.isBlank() ? "(PDF에서 텍스트를 추출하지 못했습니다.)" : extracted);
 
             return analyzeFromText(req);
-
         } catch (Exception e) {
             throw new RuntimeException("PDF 분석 실패: " + e.getMessage(), e);
         }
     }
 
-   //open api 콜
-    private JsonNode callOpenAi(CiAnalyzeTextRequest req) throws IOException {
+   //ai 개선본 재분석을 통해 목표점수 도출
+    public CiRewriteResponse rewriteFromText(CiRewriteRequest req) {
+        try {
+            final int TARGET = 90;
+            final int MAX_TRY = 3;
+
+            String currentPrompt = buildRewritePrompt(req);
+            CiRewriteResponse last = null;
+
+            for (int attempt = 1; attempt <= MAX_TRY; attempt++) {
+                JsonNode rewriteNode = callOpenAiRaw(currentPrompt);
+                last = toRewriteResponse(rewriteNode);
+
+                String rewrittenEssay = safe(last.getRewrittenEssay()).trim();
+                if (rewrittenEssay.isBlank()) break;
+
+                //개선본을 다시 분석하여 점수 확인
+                CiAnalyzeTextRequest analyzeReq = new CiAnalyzeTextRequest();
+                analyzeReq.setJobRole(req.getJobRole());
+                analyzeReq.setJobDetail(req.getJobDetail());
+                analyzeReq.setTitle(req.getTitle());
+                analyzeReq.setContent(rewrittenEssay);
+
+                JsonNode analyzed = callOpenAiAnalyze(analyzeReq);
+                int score = analyzed.path("totalScore").asInt(0);
+
+                if (score >= TARGET) {
+                    // 점수 충분하면 종료
+                    return last;
+                }
+
+                // 목표치보다 낮으면 약점 피드백 활용하여 다시 재작성
+                String weaknesses = analyzed.path("weaknesses").asText("");
+                String feedback = analyzed.path("feedback").asText("");
+
+                currentPrompt = buildRewritePromptWithHint(req, score, weaknesses, feedback);
+            }
+
+            // 마지막 결과라도 리턴
+            return last != null ? last : CiRewriteResponse.builder().rewrittenEssay("").changeSummary(List.of()).build();
+        } catch (Exception e) {
+            throw new RuntimeException("AI 개선본 생성 실패: " + e.getMessage(), e);
+        }
+    }
+
+    private String buildRewritePromptWithHint(CiRewriteRequest req, int score, String weaknesses, String feedback) throws IOException {
+        String base = buildRewritePrompt(req);
+        return base +
+                "\n\n[직전 평가 결과]\n" +
+                "- 점수: " + score + "\n" +
+                "- 약점: " + safe(weaknesses) + "\n" +
+                "- 피드백: " + safe(feedback) + "\n\n" +
+                "위 약점/피드백을 반드시 반영해서 점수를 올려 다시 작성하라.\n" +
+                "특히 수치/성과(최소 3개), STAR 구조, 직무 키워드 삽입, 차별성 1~2문장을 강화하라.\n";
+    }
+
+    //openai 호출
+    private JsonNode callOpenAiAnalyze(CiAnalyzeTextRequest req) throws IOException {
+        String prompt = buildAnalyzePrompt(req);
+        JsonNode raw = callOpenAiRaw(prompt);
+
+        // raw는 “모델 응답 JSON 문자열”을 다시 parse한 결과여야 함
+        // -> callOpenAiRaw는 내부에서 content.text 를 꺼내서 JSON parse까지 해줌
+        return raw;
+    }
+
+    private JsonNode callOpenAiRaw(String prompt) throws IOException {
         if (apiKey == null || apiKey.isBlank()) {
             throw new RuntimeException("ai.api-key가 설정되지 않았습니다.");
         }
 
-        String prompt = buildPrompt(req);
         RestTemplate restTemplate = new RestTemplate();
 
         Map<String, Object> body = new HashMap<>();
@@ -116,8 +175,7 @@ public class CiAnalysisService {
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
 
-        ResponseEntity<String> response =
-                restTemplate.postForEntity(apiUrl, entity, String.class);
+        ResponseEntity<String> response = restTemplate.postForEntity(apiUrl, entity, String.class);
 
         String responseBody = response.getBody();
         if (responseBody == null || responseBody.isBlank()) {
@@ -145,42 +203,66 @@ public class CiAnalysisService {
             throw new RuntimeException("GPT 응답 텍스트가 비어있습니다.");
         }
 
+        //모델이 JSON만 출력해야하기에 JSON parse
         return objectMapper.readTree(outputText);
     }
 
-    private CiAnalysisResponse toResponse(CiAnalyzeTextRequest req, JsonNode result, int ruleScore) {
+    //프롬프트 로드
+    private String buildAnalyzePrompt(CiAnalyzeTextRequest req) throws IOException {
+        ClassPathResource resource = new ClassPathResource("prompts/ci-analysis.txt");
+        String template = new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 
-        // 질문
+        return template
+                .replace("{{jobRole}}", safe(req.getJobRole()))
+                .replace("{{jobDetail}}", safe(req.getJobDetail()))
+                .replace("{{title}}", safe(req.getTitle()))
+                .replace("{{content}}", safe(req.getContent()));
+    }
+
+    private String buildRewritePrompt(CiRewriteRequest req) throws IOException {
+        ClassPathResource resource = new ClassPathResource("prompts/ci-rewrite.txt");
+        String template = new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+
+        return template
+                .replace("{{jobRole}}", safe(req.getJobRole()))
+                .replace("{{jobDetail}}", safe(req.getJobDetail()))
+                .replace("{{title}}", safe(req.getTitle()))
+                .replace("{{content}}", safe(req.getContent()));
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
+    }
+
+    //응답 맵핑
+    private CiAnalysisResponse toResponse(CiAnalyzeTextRequest req, JsonNode result, int ruleScore) {
         List<String> questions = new ArrayList<>();
         JsonNode qNode = result.path("questions");
         if (qNode.isArray()) {
             for (JsonNode q : qNode) questions.add(q.asText());
         }
 
-        //의도 없으면 빈배열
         List<String> intents = new ArrayList<>();
         JsonNode iNode = result.path("questionIntents");
         if (iNode.isArray()) {
             for (JsonNode it : iNode) intents.add(it.asText());
         }
 
-        // (선택) 길이 맞추기: questions가 3개인데 intents가 0~2개면 빈값 채움
         while (intents.size() < questions.size()) intents.add("");
         if (intents.size() > questions.size()) intents = intents.subList(0, questions.size());
 
-        // GPT 점수 읽기 (현재 "totalScore"를 LLM 점수 원천으로 사용)
         int gptScoreRaw = result.path("totalScore").asInt(0);
-
-        // LLM 점수 0~60점 보정
         int llmScore = clamp((int) Math.round(gptScoreRaw * 0.60), 0, 60);
-
-        // 총점 0~100점 보정
         int totalScore = clamp(ruleScore + llmScore, 0, 100);
 
         long fakeId = System.currentTimeMillis();
 
         return CiAnalysisResponse.builder()
+
                 .analysisId(fakeId)
+                .jobRole(req.getJobRole())
+                .jobDetail(req.getJobDetail())
+
                 .title(req.getTitle())
                 .content(req.getContent())
                 .ruleScore(ruleScore)
@@ -195,27 +277,22 @@ public class CiAnalysisService {
                 .build();
     }
 
+    private CiRewriteResponse toRewriteResponse(JsonNode result) {
+        String rewritten = result.path("rewrittenEssay").asText("");
+        List<String> summary = new ArrayList<>();
 
-    private String buildPrompt(CiAnalyzeTextRequest req) throws IOException {
-        ClassPathResource resource = new ClassPathResource("prompts/ci-analysis.txt");
+        JsonNode sNode = result.path("changeSummary");
+        if (sNode.isArray()) {
+            for (JsonNode n : sNode) summary.add(n.asText());
+        }
 
-        String template = new String(
-                resource.getInputStream().readAllBytes(),
-                StandardCharsets.UTF_8
-        );
-
-        return template
-                .replace("{{jobRole}}", safe(req.getJobRole()))
-                .replace("{{jobDetail}}", safe(req.getJobDetail()))
-                .replace("{{title}}", safe(req.getTitle()))
-                .replace("{{content}}", safe(req.getContent()));
+        return CiRewriteResponse.builder()
+                .rewrittenEssay(rewritten)
+                .changeSummary(summary)
+                .build();
     }
 
-    private String safe(String value) {
-        return value == null ? "" : value;
-    }
-
-    //룰 최대 40점
+    // 룰 구조점수 40점 맥스
     private int calcRuleScore(String jobRole, String jobDetail, String title, String content) {
         String t = safe(title).trim();
         String c = safe(content).trim();
@@ -224,7 +301,6 @@ public class CiAnalysisService {
 
         int score = 0;
 
-        // 길이 (0~10)점
         int len = c.length();
         if (len >= 800) score += 10;
         else if (len >= 500) score += 8;
@@ -232,34 +308,29 @@ public class CiAnalysisService {
         else if (len >= 150) score += 4;
         else if (len >= 30) score += 2;
 
-        // 문단 구조 (0~10)점
         int paragraphs = countParagraphs(c);
         if (paragraphs >= 4) score += 10;
         else if (paragraphs == 3) score += 8;
         else if (paragraphs == 2) score += 6;
         else if (paragraphs == 1) score += 3;
 
-        // 수치 성과 포함 (0~8)점
         int numbers = countNumbers(c);
         if (numbers >= 4) score += 8;
         else if (numbers == 3) score += 6;
         else if (numbers == 2) score += 4;
         else if (numbers == 1) score += 2;
 
-        // 직무 적합 키워드 (0~6)점
         int fit = 0;
         if (!jr.isBlank() && (containsAnyToken(c, jr) || containsAnyToken(t, jr))) fit += 3;
         if (!jd.isBlank() && (containsAnyToken(c, jd) || containsAnyToken(t, jd))) fit += 3;
         score += clamp(fit, 0, 6);
 
-        // 직군 전문성 키워드 (0~6)점
         int expert = countRoleKeywords(c, jr);
         if (expert >= 6) score += 6;
         else if (expert >= 4) score += 5;
         else if (expert >= 2) score += 3;
         else if (expert >= 1) score += 1;
 
-        // 액션/기여 표현 (0~6)점
         int action = countActionWords(c);
         if (action >= 6) score += 6;
         else if (action >= 4) score += 5;
@@ -273,15 +344,12 @@ public class CiAnalysisService {
         if (c.isBlank()) return 0;
         String[] parts = c.split("\\n\\s*\\n");
         int count = 0;
-        for (String p : parts) {
-            if (!p.trim().isBlank()) count++;
-        }
+        for (String p : parts) if (!p.trim().isBlank()) count++;
         return count;
     }
 
     private int countNumbers(String c) {
         if (c.isBlank()) return 0;
-        // 숫자, %, ms, s, 건, 명 등 감지
         Pattern p = Pattern.compile("(\\d+\\.?\\d*)\\s*(%|ms|s|초|분|건|명|개|회|배|GB|MB)?");
         var m = p.matcher(c);
         int count = 0;
@@ -294,13 +362,11 @@ public class CiAnalysisService {
 
         String lowerText = text.toLowerCase();
         String lowerPhrase = phrase.toLowerCase().trim();
-
-        // 공백,슬래시,언더스코어,하이픈,쉼표,중점(∙) 기준으로 분리
         String[] tokens = lowerPhrase.split("[\\s/,_\\-∙]+");
 
         for (String tk : tokens) {
             tk = tk.trim();
-            if (tk.length() < 2) continue;  // 너무 짧은 단어는 무시(오탐 방지)
+            if (tk.length() < 2) continue;
             if (lowerText.contains(tk)) return true;
         }
         return false;
@@ -313,13 +379,10 @@ public class CiAnalysisService {
                 "테스트", "모니터링", "자동화", "협업", "리딩", "관리"
         };
         int hit = 0;
-        for (String w : words) {
-            if (c.contains(w)) hit++;
-        }
+        for (String w : words) if (c.contains(w)) hit++;
         return hit;
     }
 
-    /*  jobRole 입력의 구분자 문자 변형을 대비해서 정규화 UI,DB,프론트에서 서로 다른 문자로 올 수 있어서 안전장치 */
     private String normalizeRole(String jobRole) {
         if (jobRole == null) return "";
         return jobRole.trim()
@@ -330,7 +393,6 @@ public class CiAnalysisService {
                 .replace(" ", "");
     }
 
-   //직군별 키워드 포함 개수 카운트
     private int countRoleKeywords(String content, String jobRole) {
         if (content == null || content.isBlank()) return 0;
 
@@ -343,21 +405,17 @@ public class CiAnalysisService {
         int hit = 0;
         for (String k : keywords) {
             String kk = k.toLowerCase();
-            if (kk.length() < 2) continue; // ✅ 오탐 방지(너무 짧은 키워드 제외)
+            if (kk.length() < 2) continue;
             if (lower.contains(kk)) hit++;
         }
         return hit;
     }
-
-
-    // ----------------------------- PDF -----------------------
+    //pdf
     private void validatePdf(MultipartFile file) {
-        if (file == null || file.isEmpty()) {
-            throw new RuntimeException("PDF 파일이 비어있습니다.");
-        }
+        if (file == null || file.isEmpty()) throw new RuntimeException("PDF 파일이 비어있습니다.");
+
         String name = safe(file.getOriginalFilename());
         String ct = file.getContentType();
-
         boolean isPdf = (ct != null && ct.equalsIgnoreCase("application/pdf")) || name.toLowerCase().endsWith(".pdf");
         if (!isPdf) throw new RuntimeException("PDF 파일만 업로드 가능합니다.");
 
@@ -379,7 +437,6 @@ public class CiAnalysisService {
         if (text.length() <= max) return text;
         return text.substring(0, max);
     }
-
 
     private int clamp(int v, int min, int max) {
         return Math.max(min, Math.min(max, v));
