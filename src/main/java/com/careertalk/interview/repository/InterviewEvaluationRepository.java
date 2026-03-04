@@ -61,4 +61,86 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
             @Param("status") String status,
             @Param("errorMessage") String errorMessage
     );
+
+    // 직전(이전) 점수: 같은 userId의 현재 session created_at 이전 중 최신 1개
+    @Query(value = """
+    SELECT ie.overall_score
+    FROM interview_sessions s
+    JOIN interview_evaluations ie ON ie.session_id = s.session_id
+    WHERE s.user_id = :userId
+      AND ie.analysis_status = 'DONE'
+      AND ie.overall_score IS NOT NULL
+      AND s.created_at < :createdAt
+    ORDER BY s.created_at DESC
+    LIMIT 1
+    """, nativeQuery = true)
+    Integer findPrevOverallScore(
+            @Param("userId") Long userId,
+            @Param("createdAt") java.time.LocalDateTime createdAt
+    );
+
+    // 전체 평균 점수: DONE 평가 평균 (현재 세션은 제외)
+    @Query(value = """
+    SELECT AVG(overall_score)
+    FROM interview_evaluations
+    WHERE analysis_status = 'DONE'
+      AND overall_score IS NOT NULL
+      AND session_id <> :sessionId
+    """, nativeQuery = true)
+    Double findGlobalAverageScoreExcludingSession(@Param("sessionId") Long sessionId);
+
+    @Query(value = """
+    SELECT
+      CASE
+        WHEN COUNT(*) = 0 THEN NULL
+        ELSE ROUND(
+          (SUM(CASE WHEN overall_score < :overallScore THEN 1 ELSE 0 END) * 100.0) / COUNT(*)
+        )
+      END AS percentile_rank
+    FROM interview_evaluations
+    WHERE analysis_status = 'DONE'
+      AND overall_score IS NOT NULL
+      AND overall_score > 0
+      AND session_id <> :sessionId
+    """, nativeQuery = true)
+    Double findPercentileRankExcludingSession(
+            @Param("sessionId") Long sessionId,
+            @Param("overallScore") Integer overallScore
+    );
+    @Query(value = """
+    SELECT DATE_FORMAT(s.created_at, '%Y-%m') AS ym, e.overall_score AS score
+    FROM interview_sessions s
+    JOIN interview_evaluations e ON e.session_id = s.session_id
+    WHERE s.user_id = :userId
+      AND e.analysis_status = 'DONE'
+      AND e.overall_score IS NOT NULL
+    ORDER BY s.created_at DESC
+    LIMIT :limit
+    """, nativeQuery = true)
+    java.util.List<Object[]> findRecentScoreHistory(@Param("userId") Long userId, @Param("limit") int limit);
+
+    @Query(value = """
+    SELECT e.result_json
+    FROM interview_sessions s
+    JOIN interview_evaluations e ON e.session_id = s.session_id
+    WHERE s.user_id = :userId
+      AND s.created_at < :createdAt
+      AND e.analysis_status = 'DONE'
+      AND e.result_json IS NOT NULL
+    ORDER BY s.created_at DESC
+    LIMIT 1
+    """, nativeQuery = true)
+    String findPrevResultJson(@Param("userId") Long userId, @Param("createdAt") java.time.LocalDateTime createdAt);
+
+    @Query(value = """
+    SELECT AVG(CAST(JSON_UNQUOTE(JSON_EXTRACT(result_json, :jsonPath)) AS DECIMAL(10,2)))
+    FROM interview_evaluations
+    WHERE analysis_status = 'DONE'
+      AND result_json IS NOT NULL
+      AND session_id <> :sessionId
+    """, nativeQuery = true)
+    Double avgFromResultJson(@Param("sessionId") Long sessionId, @Param("jsonPath") String jsonPath);
+
+
+
 }
