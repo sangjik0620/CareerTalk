@@ -18,6 +18,9 @@ public class OpenAiService {
     @Value("${ai.api-key}")
     private String apiKey;
 
+    @Value("${ai.model.name}")
+    private String aiModelName;
+
     private final String OPENAI_URL = "https://api.openai.com/v1/chat/completions";
     private final RestTemplate restTemplate = new RestTemplate();
 
@@ -29,7 +32,7 @@ public class OpenAiService {
         headers.setBearerAuth(apiKey);
 
         Map<String, Object> requestBody = new HashMap<>();
-        requestBody.put("model", "gpt-4.1-nano");
+        requestBody.put("model", aiModelName);
         requestBody.put("response_format", Map.of("type", "json_object"));
 
         // 텍스트와 이미지를 하나의 리스트로 조립
