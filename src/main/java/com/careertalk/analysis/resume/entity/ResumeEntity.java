@@ -2,11 +2,12 @@ package com.careertalk.analysis.resume.entity;
 
 import jakarta.persistence.*;
 import lombok.AccessLevel;
-import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
 
@@ -14,7 +15,7 @@ import java.time.LocalDateTime;
 @Getter
 @Table(name = "resumes")
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-@AllArgsConstructor
+@EntityListeners(AuditingEntityListener.class)          // ✅ 추가: @CreatedDate, @LastModifiedDate 동작에 필수
 public class ResumeEntity {
 
     @Id
@@ -42,4 +43,11 @@ public class ResumeEntity {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @Builder                                             // ✅ 추가: id·날짜 제외한 필드만 받는 빌더
+    public ResumeEntity(Long userId, Long fileId, String resumeTitle, String status) {
+        this.userId = userId;
+        this.fileId = fileId;
+        this.resumeTitle = resumeTitle;
+        this.status = status;
+    }
 }
