@@ -10,7 +10,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 
 import java.time.Duration;
 import java.time.LocalDate;
@@ -71,43 +73,45 @@ public class InterviewEvaluationService {
     }
 
     @Transactional
-    public void runAnalysis(Long sessionId) {
-        // 상태: PROCESSING
-        evaluationRepository.updateAnalysisStatus(sessionId, "PROCESSING", null);
+    public void runAnalysisInternal(Long sessionId) throws Exception {
 
-        try {
-            InterviewSession session = sessionRepository.findById(sessionId)
-                    .orElseThrow(() -> new NoSuchElementException("session not found"));
+        InterviewSession session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new NoSuchElementException("session not found"));
 
-            List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
+        List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
 
-            // 1) turn별 분석 (STT 존재 + feedback 비어있음)
-            for (InterviewTurn t : turns) {
-                boolean hasStt = t.getSttText() != null && !t.getSttText().isBlank();
-                boolean noFeedback = t.getFeedbackJson() == null || t.getFeedbackJson().isBlank();
-                if (hasStt && noFeedback) {
-                    turnFeedbackService.analyzeAndSaveTurnFeedback(t);
-                }
+        for (InterviewTurn t : turns) {
+            boolean hasStt = t.getSttText() != null && !t.getSttText().isBlank();
+            boolean noFeedback = t.getFeedbackJson() == null || t.getFeedbackJson().isBlank();
+            if (hasStt && noFeedback) {
+                turnFeedbackService.analyzeAndSaveTurnFeedback(t);
             }
-
-            // 2) session 종합 생성 + upsert
-            ObjectNode json = buildEvaluationFromTurns(session, turns);
-            int overall = json.path("summary").path("overallScore").asInt(0);
-
-            String jsonStr = objectMapper.writeValueAsString(json);
-            String strengths = joinArray(json.path("summary").path("strengths"));
-            String weaknesses = joinArray(json.path("summary").path("weaknesses"));
-            String nextActions = joinNextActions(json.path("summary").path("nextActions"));
-
-            evaluationRepository.upsert(sessionId, overall, strengths, weaknesses, nextActions, jsonStr);
-
-            // 상태: DONE
-            evaluationRepository.updateAnalysisStatus(sessionId, "DONE", null);
-
-        } catch (Exception e) {
-            evaluationRepository.updateAnalysisStatus(sessionId, "FAILED", e.getMessage());
-            throw new IllegalStateException("analysis failed", e);
         }
+
+        ObjectNode json = buildEvaluationFromTurns(session, turns);
+        int overall = json.path("summary").path("overallScore").asInt(0);
+
+        String jsonStr = objectMapper.writeValueAsString(json);
+        String strengths = joinArray(json.path("summary").path("strengths"));
+        String weaknesses = joinArray(json.path("summary").path("weaknesses"));
+        String nextActions = joinNextActions(json.path("summary").path("nextActions"));
+
+        evaluationRepository.upsert(sessionId, overall, strengths, weaknesses, nextActions, jsonStr);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markProcessing(Long sessionId) {
+        evaluationRepository.updateAnalysisStatus(sessionId, "PROCESSING", null);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markDone(Long sessionId) {
+        evaluationRepository.updateAnalysisStatus(sessionId, "DONE", null);
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markFailed(Long sessionId, String message) {
+        evaluationRepository.updateAnalysisStatus(sessionId, "FAILED", message);
     }
 
     @Transactional(readOnly = true)

@@ -18,10 +18,13 @@ public class OpenAiService {
     @Value("${ai.api-key}")
     private String apiKey;
 
+    @Value("${ai.model.name}")
+    private String aiModelName;
+
     private final String OPENAI_URL = "https://api.openai.com/v1/chat/completions";
     private final RestTemplate restTemplate = new RestTemplate();
 
-    // ⭐ base64Images 파라미터 추가
+    //  base64Images 파라미터 추가
     public String getAiResponse(String systemPrompt, String userPrompt, List<String> base64Images) {
 
         HttpHeaders headers = new HttpHeaders();
@@ -29,16 +32,16 @@ public class OpenAiService {
         headers.setBearerAuth(apiKey);
 
         Map<String, Object> requestBody = new HashMap<>();
-        requestBody.put("model", "gpt-4o");
+        requestBody.put("model", aiModelName);
         requestBody.put("response_format", Map.of("type", "json_object"));
 
-        // ⭐ 텍스트와 이미지를 하나의 리스트로 조립
+        // 텍스트와 이미지를 하나의 리스트로 조립
         List<Map<String, Object>> contentList = new ArrayList<>();
         contentList.add(Map.of("type", "text", "text", userPrompt));
 
         if (base64Images != null && !base64Images.isEmpty()) {
             for (String base64 : base64Images) {
-                // ⭐ 핵심: detail: low 를 줘서 해상도 상관없이 무조건 85토큰(약 0.2원)만 과금되도록 강제
+                //  핵심: detail: low
                 contentList.add(Map.of(
                         "type", "image_url",
                         "image_url", Map.of(
