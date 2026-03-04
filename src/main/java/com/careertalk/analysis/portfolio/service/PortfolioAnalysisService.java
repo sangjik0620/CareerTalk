@@ -9,6 +9,11 @@ import com.careertalk.analysis.portfolio.entity.PortfolioEntity;
 import com.careertalk.analysis.portfolio.repository.PortfolioRepository;
 import com.careertalk.analysis.portfolio.util.FileParserUtil;
 import com.careertalk.analysis.commonrepository.AnalysisRepository;
+
+import com.careertalk.file.entity.FileEntity;
+import com.careertalk.file.repository.FileRepository;
+import com.careertalk.file.service.S3Service;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -22,7 +27,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StreamUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -35,97 +42,113 @@ public class PortfolioAnalysisService {
     private final PortfolioRepository portfolioRepository;
     private final AnalysisRepository analysisRepository;
     private final ObjectMapper objectMapper;
-
-    // 조립할 부품들 주입
     private final OpenAiService openAiService;
     private final FileParserUtil fileParserUtil;
 
-    // 프롬프트 파일 불러오기
+    private final S3Service s3Service;
+    private final FileRepository fileRepository;
+
+    @Value("${aws.s3.bucket}")
+    private String s3BucketName;
+
     @Value("classpath:prompts/portfolio-analysis-prompt.txt")
     private Resource systemPromptResource;
 
+    @Value("${ai.model.name}")
+    private String aiModelName;
 
-    // 1. 최초 분석 기능
+    @Value("${ai.model.version}")
+    private String aiModelVersion;
 
-    @Transactional
+    @Value("${ai.prompt.version}")
+    private String aiPromptVersion;
+
+    @Transactional(noRollbackFor = RuntimeException.class)
     public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String jobCategory, String detailedPosition) {
 
-        // ⭐ 변경점 1: 포트폴리오 엔티티를 저장하기 "전"에 텍스트를 먼저 추출합니다!
-        String extractedText = fileParserUtil.extractText(file);
-        log.info("파일에서 추출된 텍스트 길이: {}자", extractedText.length());
-
-        // 1. 포트폴리오 엔티티 저장 (추출한 텍스트도 함께 DB에 보관!)
         Long currentUserId = 1L;
+
+        // 1. S3에 파일 업로드
+        String s3Key = "";
+        try {
+            s3Key = s3Service.uploadFile(file, currentUserId);
+        } catch (IOException e) {
+            throw new RuntimeException("S3 파일 업로드에 실패했습니다.", e);
+        }
+
+        // 2. FileEntity DB 저장
+        Long realFileId;
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(s3Key.getBytes(StandardCharsets.UTF_8));
+
+            FileEntity fileEntity = new FileEntity();
+            fileEntity.setUserId(currentUserId);
+            fileEntity.setFileType("PORTFOLIO");
+            fileEntity.setOriginalName(file.getOriginalFilename());
+            fileEntity.setMimeType(file.getContentType());
+            fileEntity.setFileSize(file.getSize());
+            fileEntity.setS3Bucket(s3BucketName);
+            fileEntity.setS3Key(s3Key);
+            fileEntity.setS3KeyHash(hash);
+            fileEntity.setStatus("ACTIVE");
+
+            FileEntity savedFile = fileRepository.save(fileEntity);
+            realFileId = savedFile.getFileId();
+        } catch (Exception e) {
+            log.error("파일 DB 저장 실패", e);
+            throw new RuntimeException("파일 정보 저장 중 오류가 발생했습니다.");
+        }
+
+        // 3. 텍스트 및 이미지 추출
+        String extractedText = fileParserUtil.extractText(file);
+        List<String> base64Images = fileParserUtil.extractImagesAsBase64(file);
+
         PortfolioEntity portfolio = PortfolioEntity.builder()
                 .userId(currentUserId)
-                .fileId(1L)
+                .fileId(realFileId)
                 .title(file.getOriginalFilename())
-                .extractedText(extractedText) // ⭐ 여기에 텍스트를 영구 저장합니다.
+                .extractedText(extractedText)
                 .status("ACTIVE")
                 .build();
         portfolioRepository.save(portfolio);
 
-        // 2. AI에게 보낼 프롬프트 조립
         String systemPrompt = getSystemPrompt();
-
         String targetJobData = (detailedPosition != null && !detailedPosition.isBlank())
                 ? jobCategory + " (" + detailedPosition + ")"
                 : jobCategory;
-
         String userPrompt = "지원 직무: " + targetJobData + "\n\n포트폴리오 내용:\n" + extractedText;
 
-        // 3. OpenAI 호출하여 결과 받아오기
-        log.info("AI 분석 시작... (직무: {})", targetJobData);
-        String aiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt);
-        log.info("AI 분석 완료!");
+        // ⭐ 4. AI 통신 (try-catch로 감싸서 실패 처리)
+        try {
+            log.info("AI 분석 시작... (직무: {})", targetJobData);
+            String aiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, base64Images);
+            log.info("AI 분석 완료!");
 
-        // 4. 받아온 JSON 파싱해서 DB에 저장하고 반환하기
-        return processAndSaveAiResult(aiResultJson, currentUserId, portfolio.getPortfolioId(), jobCategory);
-    }
+            // 성공 시 SUCCESS 처리
+            return processAndSaveAiResult(aiResultJson, currentUserId, portfolio.getPortfolioId(), jobCategory, "SUCCESS", null);
 
+        } catch (Exception e) {
+            log.error("AI 분석 중 에러 발생: {}", e.getMessage());
 
-    // 2. 재분석 기능
+            // 실패 시 DB에 에러 메시지 저장 (status: FAIL)
+            processAndSaveAiResult(null, currentUserId, portfolio.getPortfolioId(), jobCategory, "FAILED", e.getMessage());
 
-    @Transactional
-    public PortfolioAnalysisResponse reanalyze(Long portfolioId) {
-
-        // 1. DB에서 기존 포트폴리오 찾기 (텍스트가 저장되어 있음!)
-        PortfolioEntity portfolio = portfolioRepository.findById(portfolioId)
-                .orElseThrow(() -> new RuntimeException("포트폴리오 정보를 찾을 수 없습니다."));
-
-        String savedText = portfolio.getExtractedText();
-        if (savedText == null || savedText.isBlank()) {
-            throw new RuntimeException("저장된 포트폴리오 텍스트가 없습니다. 원본 파일을 다시 업로드해주세요.");
+            // 프론트엔드로 에러 던지기
+            throw new RuntimeException("AI 분석 서비스에 장애가 발생했습니다. 잠시 후 다시 시도해주세요.");
         }
-
-        // 2. 직무 정보(jobCategory)를 가져오기 위해 가장 최근 분석 기록 찾기
-
-        AnalysisEntity lastAnalysis = analysisRepository.findFirstByTargetIdOrderByAnalysisIdDesc(portfolioId)
-                .orElseThrow(() -> new RuntimeException("이전 분석 기록을 찾을 수 없습니다."));
-
-        String jobCategory = lastAnalysis.getTargetJob();
-
-        // 3. 프롬프트 조립
-        String systemPrompt = getSystemPrompt();
-        String userPrompt = "지원 직무: " + jobCategory + "\n\n포트폴리오 내용:\n" + savedText;
-
-        // 4. AI에게 다시 물어보기 (버튼 딸깍!)
-        log.info("포트폴리오 ID: {} 재분석을 시작합니다... (파일 추출 생략)", portfolioId);
-        String newAiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt);
-        log.info("AI 재분석 완료!");
-
-        // 5. 새로운 결과(Row)를 DB에 저장하고 반환하기
-        return processAndSaveAiResult(newAiResultJson, portfolio.getUserId(), portfolioId, jobCategory);
     }
 
     @Transactional(readOnly = true)
     public PortfolioAnalysisResponse getAnalysisResult(Long analysisId) {
-
-        // 1. DB에서 해당 포트폴리오의 가장 최근 분석 기록을 찾습니다.
         AnalysisEntity analysis = analysisRepository.findById(analysisId)
                 .orElseThrow(() -> new RuntimeException("해당 포트폴리오의 분석 결과를 찾을 수 없습니다."));
 
-        // 2. 찾아낸 엔티티를 프론트엔드가 좋아하는 DTO 형태로 변환해서 돌려줍니다!
+        // 만약 분석 실패(FAIL) 건을 조회하려 한다면 프론트엔드에 빈 객체나 에러를 던져야 합니다.
+        if ("FAILED".equals(analysis.getStatus())) {
+            throw new RuntimeException("이 분석은 실패한 기록입니다. 에러 원인: " + analysis.getErrorMessage());
+        }
+
         try {
             return convertToResponseDto(analysis);
         } catch (JsonProcessingException e) {
@@ -134,8 +157,6 @@ public class PortfolioAnalysisService {
         }
     }
 
-
-    // 프롬프트 텍스트 파일 읽어오는 공통 메서드
     private String getSystemPrompt() {
         try {
             return StreamUtils.copyToString(systemPromptResource.getInputStream(), StandardCharsets.UTF_8);
@@ -145,8 +166,29 @@ public class PortfolioAnalysisService {
         }
     }
 
-    // AI 응답 JSON을 파싱해서 DB에 넣고 DTO로 변환하는 공통 메서드
-    private PortfolioAnalysisResponse processAndSaveAiResult(String aiResultJson, Long userId, Long portfolioId, String jobCategory) {
+
+    private PortfolioAnalysisResponse processAndSaveAiResult(String aiResultJson, Long userId, Long portfolioId, String jobCategory, String status, String errorMessage) {
+
+        // 에러 상황일 때 빈 값으로 저장
+        if ("FAILED".equals(status)) {
+            AnalysisEntity failedAnalysis = AnalysisEntity.builder()
+                    .userId(userId)
+                    .targetType("PORTFOLIO")
+                    .targetId(portfolioId)
+                    .targetJob(jobCategory)
+                    .status("FAILED")
+                    .errorMessage(errorMessage)
+                    .modelName(aiModelName)
+                    .modelVersion(aiModelVersion)
+                    .promptVersion(aiPromptVersion)
+                    .analyzedAt(java.time.LocalDateTime.now())
+                    .build();
+
+            analysisRepository.save(failedAnalysis);
+            return null;
+        }
+
+        // 성공 상황일 때 파싱해서 저장
         try {
             JsonNode rootNode = objectMapper.readTree(aiResultJson);
 
@@ -167,6 +209,11 @@ public class PortfolioAnalysisService {
                     .oneLineReview(oneLineReview)
                     .summaryDetail(summaryDetail)
                     .status("SUCCESS")
+                    .errorMessage(null)
+                    .modelName(aiModelName)
+                    .modelVersion(aiModelVersion)
+                    .promptVersion(aiPromptVersion)
+                    .analyzedAt(java.time.LocalDateTime.now())
                     .build();
 
             AnalysisEntity savedAnalysis = analysisRepository.save(analysis);
@@ -179,7 +226,6 @@ public class PortfolioAnalysisService {
         }
     }
 
-    // 엔티티를 DTO로 변환
     private PortfolioAnalysisResponse convertToResponseDto(AnalysisEntity analysis) throws JsonProcessingException {
         List<QuestionDto> questionList = objectMapper.readValue(
                 analysis.getExpectedQuestionsJson(), new TypeReference<>() {}

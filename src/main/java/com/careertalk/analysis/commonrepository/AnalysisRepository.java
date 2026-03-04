@@ -9,7 +9,9 @@ import java.util.Optional;
 @Repository
 public interface AnalysisRepository extends JpaRepository<AnalysisEntity, Long> {
 
-    Optional<AnalysisEntity> findByTargetTypeAndTargetId(String targetType, Long targetId);
-
     Optional<AnalysisEntity> findFirstByTargetIdOrderByAnalysisIdDesc(Long targetId);
+
+    Optional<AnalysisEntity> findTopByUserIdAndTargetTypeAndTargetIdOrderByAnalyzedAtDesc(
+            Long userId, String targetType, Long targetId
+    );
 }

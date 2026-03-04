@@ -67,4 +67,50 @@ public class InterviewTurn {
 
     @Column(name = "feedback_json", columnDefinition = "JSON")
     private String feedbackJson;
+
+    @Column(name="audio_metrics_json", columnDefinition="JSON")
+    private String audioMetricsJson;
+
+    @Column(name = "python_metrics_json", columnDefinition = "json") // TEXT면 columnDefinition 지워도 됨
+    private String pythonMetricsJson;
+
+    @Column(name = "audio_scores_json", columnDefinition = "json")
+    private String audioScoresJson;
+
+    // ===== Turn Analysis 상태/재시도/에러 (FastAPI metrics) =====
+    @Enumerated(EnumType.STRING)
+    @Column(name = "turn_analysis_status", nullable = false, length = 20)
+    private TurnAnalysisStatus turnAnalysisStatus = TurnAnalysisStatus.PENDING;
+
+    @Column(name = "turn_analysis_attempt_count", nullable = false)
+    private Integer turnAnalysisAttemptCount = 0;
+
+    @Lob
+    @Column(name = "turn_analysis_error_message")
+    private String turnAnalysisErrorMessage;
+
+    @Column(name = "turn_analysis_started_at")
+    private LocalDateTime turnAnalysisStartedAt;
+
+    @Column(name = "turn_analysis_completed_at")
+    private LocalDateTime turnAnalysisCompletedAt;
+
+
+    // ===== Turn Score 상태/재시도/에러 (Java scoring) =====
+    @Enumerated(EnumType.STRING)
+    @Column(name = "turn_score_status", nullable = false, length = 20)
+    private TurnScoreStatus turnScoreStatus = TurnScoreStatus.PENDING;
+
+    @Column(name = "turn_score_attempt_count", nullable = false)
+    private Integer turnScoreAttemptCount = 0;
+
+    @Lob
+    @Column(name = "turn_score_error_message")
+    private String turnScoreErrorMessage;
+
+    @Column(name = "turn_score_started_at")
+    private LocalDateTime turnScoreStartedAt;
+
+    @Column(name = "turn_score_completed_at")
+    private LocalDateTime turnScoreCompletedAt;
 }

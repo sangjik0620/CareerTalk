@@ -28,24 +28,13 @@ public class PortfolioAnalysisController {
         return portfolioAnalysisService.analyzeAndSave(file, jobCategory, detailedPosition);
     }
 
-    @PostMapping("/{portfolioId}/reanalyze")
-    public ResponseEntity<PortfolioAnalysisResponse> reanalyzePortfolio(
-            @PathVariable("portfolioId") Long portfolioId) {
-
-        log.info("재분석 요청 들어옴 - 포트폴리오 ID: {}", portfolioId);
-
-        // 서비스의 reanalyze 메서드 호출!
-        PortfolioAnalysisResponse response = portfolioAnalysisService.reanalyze(portfolioId);
-
-        return ResponseEntity.ok(response);
-    }
 
     @GetMapping("/{analysisId}/result")
     public ResponseEntity<PortfolioAnalysisResponse> getPortfolioResult(
             @PathVariable("analysisId") Long analysisId) {
 
 
-        // 방금 만든 Service 메서드 호출!
+
         PortfolioAnalysisResponse response = portfolioAnalysisService.getAnalysisResult(analysisId);
 
         return ResponseEntity.ok(response);

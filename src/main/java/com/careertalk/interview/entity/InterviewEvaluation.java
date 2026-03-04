@@ -46,9 +46,19 @@ public class InterviewEvaluation {
     @Column(name = "created_at", insertable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    public JsonNode getResultJson() {
-        return null;
-    }
+    @Enumerated(EnumType.STRING)
+    @Column(name = "analysis_status", nullable = false, length = 20)
+    private AnalysisStatus analysisStatus = AnalysisStatus.PENDING;
+
+    @Column(name = "analysis_started_at")
+    private LocalDateTime analysisStartedAt;
+
+    @Column(name = "analysis_completed_at")
+    private LocalDateTime analysisCompletedAt;
+
+    @Lob
+    @Column(name = "analysis_error_message")
+    private String analysisErrorMessage;
 
     public void setSessionId(Long sessionId) {
     }
@@ -56,11 +66,16 @@ public class InterviewEvaluation {
     public void setOverallScore(int anInt) {
     }
 
+    public JsonNode getResultJson() {
+        return null;
+    }
+
     public void setResultJson(ObjectNode json) {
     }
 
     public void setGeneratedAt(LocalDateTime now) {
     }
+
 }
 
 
