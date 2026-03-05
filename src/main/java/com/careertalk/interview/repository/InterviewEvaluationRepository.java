@@ -141,6 +141,16 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
     """, nativeQuery = true)
     Double avgFromResultJson(@Param("sessionId") Long sessionId, @Param("jsonPath") String jsonPath);
 
+    @Modifying
+    @Transactional
+    @Query(value = """
+UPDATE interview_evaluations
+SET analysis_status = 'PROCESSING'
+WHERE session_id = :sessionId
+AND (analysis_status IS NULL OR analysis_status IN ('PENDING','FAILED'))
+""", nativeQuery = true)
+    int markProcessingIfPossible(@Param("sessionId") Long sessionId);
+
 
 
 }

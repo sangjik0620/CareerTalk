@@ -29,6 +29,7 @@ public class InterviewEvaluationService {
     private final InterviewTurnFeedbackService turnFeedbackService;
     private final ObjectMapper objectMapper;
 
+
     @Transactional
     public JsonNode getOrCreateEvaluationResultJson(Long sessionId) {
         String saved = evaluationRepository.findResultJsonBySessionId(sessionId);
