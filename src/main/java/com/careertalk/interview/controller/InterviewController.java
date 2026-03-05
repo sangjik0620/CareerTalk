@@ -2,6 +2,7 @@ package com.careertalk.interview.controller;
 
 import com.careertalk.interview.dto.SessionTargetRequest;
 import com.careertalk.interview.dto.InterviewResultV2Response;
+import com.careertalk.interview.repository.InterviewEvaluationRepository;
 import com.careertalk.interview.service.InterviewAnalysisWorker;
 import com.careertalk.interview.service.InterviewEvaluationService;
 import com.careertalk.interview.service.InterviewResultService;
@@ -24,6 +25,8 @@ public class InterviewController {
     private final InterviewEvaluationService evaluationService;   // ✅ 여기 하나로 통일
     private final InterviewResultService interviewResultService;  // ✅ A안(V2) 결과 생성
     private final InterviewAnalysisWorker interviewAnalysisWorker;
+    private final InterviewEvaluationRepository evaluationRepository;
+
 
     @PostMapping("/upload")
     public ResponseEntity<?> uploadInterview(
@@ -69,24 +72,26 @@ public class InterviewController {
         return ResponseEntity.ok(v2);
     }
 
-    /**
-     * ✅ 분석 시작(비동기)
-     * - PROCESSING으로 먼저 커밋
-     * - worker로 async 실행
-     */
     @PostMapping("/sessions/{sessionId}/analyze")
     public ResponseEntity<?> analyze(@PathVariable Long sessionId) {
 
-        // 1) 상태 먼저 PROCESSING으로 즉시 커밋
-        evaluationService.markProcessing(sessionId);
+        // 1) "PROCESSING 선점" 시도 (성공=1, 실패=0)
+        int updated = evaluationRepository.markProcessingIfPossible(sessionId);
 
-        // 2) 백그라운드에서 분석 실행
-        interviewAnalysisWorker.runAsync(sessionId);
+        // 2) 선점 성공한 요청만 워커 실행 (LLM 호출 1회 보장)
+        if (updated == 1) {
+            interviewAnalysisWorker.runAsync(sessionId);
+            return ResponseEntity.accepted().body(Map.of(
+                    "sessionId", sessionId,
+                    "status", "PROCESSING"
+            ));
+        }
 
-        // 3) 즉시 응답
-        return ResponseEntity.accepted().body(Map.of(
+        // 3) 이미 진행중/완료 → 워커 실행 없이 현재 상태만 반환
+        String status = evaluationRepository.findAnalysisStatusBySessionId(sessionId);
+        return ResponseEntity.ok().body(Map.of(
                 "sessionId", sessionId,
-                "status", "PROCESSING"
+                "status", status == null ? "PENDING" : status
         ));
     }
 
