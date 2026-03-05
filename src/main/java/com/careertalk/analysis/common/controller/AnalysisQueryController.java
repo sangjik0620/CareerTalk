@@ -1,7 +1,7 @@
-package com.careertalk.analysis.commoncontroller;
+package com.careertalk.analysis.common.controller;
 
-import com.careertalk.analysis.commonentity.AnalysisEntity;
-import com.careertalk.analysis.commonrepository.AnalysisRepository;
+import com.careertalk.analysis.common.entity.AnalysisEntity;
+import com.careertalk.analysis.common.repository.AnalysisRepository;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;

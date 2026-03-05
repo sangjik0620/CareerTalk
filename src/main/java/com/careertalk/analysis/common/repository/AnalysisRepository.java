@@ -1,6 +1,6 @@
-package com.careertalk.analysis.commonrepository;
+package com.careertalk.analysis.common.repository;
 
-import com.careertalk.analysis.commonentity.AnalysisEntity;
+import com.careertalk.analysis.common.entity.AnalysisEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
