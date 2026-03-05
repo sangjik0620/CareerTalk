@@ -1,4 +1,4 @@
-package com.careertalk.analysis.commonentity;
+package com.careertalk.analysis.common.entity;
 
 import lombok.AccessLevel;
 import lombok.Builder;
