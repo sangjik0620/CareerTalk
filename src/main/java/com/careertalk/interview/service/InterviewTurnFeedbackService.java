@@ -1,6 +1,6 @@
 package com.careertalk.interview.service;
 
-import com.careertalk.analysis.commonservice.OpenAiService;
+import com.careertalk.analysis.common.service.OpenAiService;
 import com.careertalk.interview.entity.InterviewTurn;
 import com.careertalk.interview.repository.InterviewTurnRepository;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -9,8 +9,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
-import java.util.List;
 
 @Service
 @RequiredArgsConstructor

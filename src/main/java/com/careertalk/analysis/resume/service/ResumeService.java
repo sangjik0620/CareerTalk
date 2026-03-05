@@ -1,8 +1,8 @@
 package com.careertalk.analysis.resume.service;
 
-import com.careertalk.analysis.commonentity.AnalysisEntity;
-import com.careertalk.analysis.commonrepository.AnalysisRepository;
-import com.careertalk.analysis.commonservice.OpenAiService;
+import com.careertalk.analysis.common.entity.AnalysisEntity;
+import com.careertalk.analysis.common.repository.AnalysisRepository;
+import com.careertalk.analysis.common.service.OpenAiService;
 import com.careertalk.analysis.resume.dto.ResumeAnalysisResponse;
 import com.careertalk.analysis.resume.dto.ResumeAnalysisResponse.DetailedEvaluationDto;
 import com.careertalk.analysis.resume.dto.ResumeAnalysisResponse.EvalItemDto;

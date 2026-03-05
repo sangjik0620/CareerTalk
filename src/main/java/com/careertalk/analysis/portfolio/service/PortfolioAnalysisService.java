@@ -1,14 +1,14 @@
 package com.careertalk.analysis.portfolio.service;
 
-import com.careertalk.analysis.commonservice.OpenAiService;
-import com.careertalk.analysis.commonentity.AnalysisEntity;
+import com.careertalk.analysis.common.service.OpenAiService;
+import com.careertalk.analysis.common.entity.AnalysisEntity;
 import com.careertalk.analysis.portfolio.dto.PortfolioAnalysisResponse;
 import com.careertalk.analysis.portfolio.dto.PortfolioAnalysisResponse.ChartDataDto;
 import com.careertalk.analysis.portfolio.dto.PortfolioAnalysisResponse.QuestionDto;
 import com.careertalk.analysis.portfolio.entity.PortfolioEntity;
 import com.careertalk.analysis.portfolio.repository.PortfolioRepository;
 import com.careertalk.analysis.portfolio.util.FileParserUtil;
-import com.careertalk.analysis.commonrepository.AnalysisRepository;
+import com.careertalk.analysis.common.repository.AnalysisRepository;
 
 import com.careertalk.file.entity.FileEntity;
 import com.careertalk.file.repository.FileRepository;
