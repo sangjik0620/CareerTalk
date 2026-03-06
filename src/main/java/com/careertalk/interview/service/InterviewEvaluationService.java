@@ -44,7 +44,6 @@ public class InterviewEvaluationService {
      * - LLM 1회 호출로 "텍스트/액션/키워드/보이스 코칭" 생성
      * - DB upsert(result_json)
      */
-    @Transactional
     public void runAnalysisInternal(Long sessionId) throws Exception {
         InterviewSession session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new NoSuchElementException("session not found"));
@@ -54,18 +53,24 @@ public class InterviewEvaluationService {
         // 1) 서버 기본 구조 생성
         ObjectNode evaluation = buildEvaluationSkeleton(session, turns);
 
-        // 2) LLM 결과 merge
+        // 2) LLM 결과 merge (트랜잭션 밖)
         applyLlmInsights(evaluation, session, turns);
 
-        // 3) 총점 = 질문별 점수 평균
+        // 3) 총점 계산
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
-        ObjectNode competency = (ObjectNode) evaluation.with("competency");
         JsonNode questionResponses = evaluation.path("interviewAnalysis").path("questionResponses");
 
         int overall = computeOverallFromQuestionResponses(questionResponses);
         summary.put("overallScore", overall);
 
-        // 5) 저장
+        // 4) DB 저장만 별도 트랜잭션
+        saveEvaluationResult(sessionId, overall, evaluation);
+    }
+
+    @Transactional
+    public void saveEvaluationResult(Long sessionId, int overall, ObjectNode evaluation) {
+        ObjectNode summary = (ObjectNode) evaluation.with("summary");
+
         String jsonStr = safeWrite(evaluation);
         String strengths = joinArray(summary.path("strengths"));
         String weaknesses = joinArray(summary.path("weaknesses"));
@@ -291,7 +296,7 @@ public class InterviewEvaluationService {
         );
 
         meta.put("llmStatus", "OK");
-        meta.put("llmMergedAt", java.time.LocalDateTime.now().toString());
+        meta.put("llmMergedAt", LocalDateTime.now().toString());
     }
 
     /**
