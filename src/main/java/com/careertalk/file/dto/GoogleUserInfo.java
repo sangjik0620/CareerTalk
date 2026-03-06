@@ -19,6 +19,7 @@ public class GoogleUserInfo implements OAuth2UserInfo {
     public String getName() {
         return null;
     }
+    // test
     @Override
     public String getPhone() { return (String) attributes.get("phone"); } // People API에서 넣은 값
     @Override
