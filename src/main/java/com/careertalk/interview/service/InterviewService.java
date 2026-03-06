@@ -114,6 +114,7 @@ public class InterviewService {
                 .map(InterviewTurn::getAnswerAudioFileId)
                 .filter(id -> id != null)
                 .distinct()
+                .sorted()
                 .toList();
 
         // 2) files 한 번에 로딩 → Map으로 변환

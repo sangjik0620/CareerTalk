@@ -60,7 +60,7 @@ public class OpenAiService {
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
 
         try {
-            log.info("OpenAI API 호출 시작... (이미지 {}장 포함)", base64Images != null ? base64Images.size() : 0);
+            log.info("OpenAI API 호출 시작... (이미지 {}장 포함)"  , base64Images != null ? base64Images.size() : 0);
 
             ResponseEntity<Map> response = restTemplate.exchange(
                     OPENAI_URL, HttpMethod.POST, entity, Map.class
