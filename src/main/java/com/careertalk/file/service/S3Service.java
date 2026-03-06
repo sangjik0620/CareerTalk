@@ -62,4 +62,12 @@ public class S3Service {
         return presignedRequest.url().toString();
     }
 
+    public java.io.InputStream downloadFile(String key) {
+        GetObjectRequest getObjectRequest = GetObjectRequest.builder()
+                .bucket(bucket)
+                .key(key)
+                .build();
+        return s3Client.getObject(getObjectRequest); // ResponseInputStream 반환
+    }
+
 }
