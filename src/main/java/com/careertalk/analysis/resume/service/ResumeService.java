@@ -248,7 +248,7 @@ public class ResumeService {
                 String errorDetail = root.path("errorDetail").asText("직군 정합성 오류");
 
                 AnalysisEntity failed = AnalysisEntity.builder()
-                        .userId(userId)
+                        .userNum(userId)
                         .targetType("RESUME")
                         .targetId(resumeId)
                         .targetJob(jobCategory)
