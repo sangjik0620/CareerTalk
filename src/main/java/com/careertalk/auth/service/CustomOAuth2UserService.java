@@ -1,10 +1,10 @@
-package com.careertalk.file.service;
+package com.careertalk.auth.service;
 
-import com.careertalk.file.dto.GoogleUserInfo;
-import com.careertalk.file.dto.NaverUserInfo;
-import com.careertalk.file.dto.KakaoUserInfo;
-import com.careertalk.file.dto.OAuth2UserInfo;
-import com.careertalk.file.entity.Member;
+import com.careertalk.auth.dto.GoogleUserInfo;
+import com.careertalk.auth.dto.NaverUserInfo;
+import com.careertalk.auth.dto.KakaoUserInfo;
+import com.careertalk.auth.dto.OAuth2UserInfo;
+import com.careertalk.auth.entity.Member;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;

@@ -1,4 +1,4 @@
-package com.careertalk.file.dto;
+package com.careertalk.auth.dto;
 
 import lombok.*;
 import java.time.LocalDate;
