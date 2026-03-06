@@ -1,4 +1,4 @@
-package com.careertalk.file.entity;
+package com.careertalk.auth.entity;
 
 import jakarta.persistence.*;
 import lombok.*;

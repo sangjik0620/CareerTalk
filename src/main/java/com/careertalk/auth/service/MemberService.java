@@ -1,10 +1,10 @@
-package com.careertalk.file.service;
+package com.careertalk.auth.service;
 
-import com.careertalk.file.dto.LoginRequestDTO;
-import com.careertalk.file.dto.SignupRequestDTO;
-import com.careertalk.file.dto.SocialSignupRequestDTO;
-import com.careertalk.file.entity.Member;
-import com.careertalk.file.repository.MemberRepository;
+import com.careertalk.auth.dto.LoginRequestDTO;
+import com.careertalk.auth.dto.SignupRequestDTO;
+import com.careertalk.auth.dto.SocialSignupRequestDTO;
+import com.careertalk.auth.entity.Member;
+import com.careertalk.auth.repository.MemberRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;

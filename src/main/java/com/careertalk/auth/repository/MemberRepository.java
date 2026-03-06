@@ -1,6 +1,6 @@
-package com.careertalk.file.repository;
+package com.careertalk.auth.repository;
 
-import com.careertalk.file.entity.Member;
+import com.careertalk.auth.entity.Member;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 import java.util.Optional;

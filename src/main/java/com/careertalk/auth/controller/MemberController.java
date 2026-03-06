@@ -1,12 +1,12 @@
-package com.careertalk.file.controller;
+package com.careertalk.auth.controller;
 
-import com.careertalk.file.dto.LoginRequestDTO;
-import com.careertalk.file.dto.MemberResponseDTO; // 1. DTO 임포트 추가
-import com.careertalk.file.dto.SignupRequestDTO;
-import com.careertalk.file.dto.SocialSignupRequestDTO;
-import com.careertalk.file.entity.Member;
-import com.careertalk.file.service.EmailService;
-import com.careertalk.file.service.MemberService;
+import com.careertalk.auth.dto.LoginRequestDTO;
+import com.careertalk.auth.dto.MemberResponseDTO; // 1. DTO 임포트 추가
+import com.careertalk.auth.dto.SignupRequestDTO;
+import com.careertalk.auth.dto.SocialSignupRequestDTO;
+import com.careertalk.auth.entity.Member;
+import com.careertalk.auth.service.EmailService;
+import com.careertalk.auth.service.MemberService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;

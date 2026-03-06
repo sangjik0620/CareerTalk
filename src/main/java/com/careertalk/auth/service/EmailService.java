@@ -1,4 +1,4 @@
-package com.careertalk.file.service;
+package com.careertalk.auth.service;
 
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;

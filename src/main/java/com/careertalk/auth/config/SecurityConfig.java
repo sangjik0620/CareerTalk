@@ -1,6 +1,6 @@
-package com.careertalk.file.config;
+package com.careertalk.auth.config;
 
-import com.careertalk.file.service.CustomOAuth2UserService;
+import com.careertalk.auth.service.CustomOAuth2UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

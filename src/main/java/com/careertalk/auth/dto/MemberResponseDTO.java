@@ -1,6 +1,6 @@
-package com.careertalk.file.dto;
+package com.careertalk.auth.dto;
 
-import com.careertalk.file.entity.Member;
+import com.careertalk.auth.entity.Member;
 import lombok.AllArgsConstructor;
 import lombok.Builder; // 빌더 패턴 추가 (선택사항)
 import lombok.Getter;

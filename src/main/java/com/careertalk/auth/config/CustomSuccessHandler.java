@@ -1,7 +1,7 @@
-package com.careertalk.file.config;
+package com.careertalk.auth.config;
 
-import com.careertalk.file.entity.Member;
-import com.careertalk.file.repository.MemberRepository;
+import com.careertalk.auth.entity.Member;
+import com.careertalk.auth.repository.MemberRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.core.user.OAuth2User;
