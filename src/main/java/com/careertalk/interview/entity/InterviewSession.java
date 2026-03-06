@@ -17,8 +17,8 @@ public class InterviewSession {
     @Column(name = "session_id")
     private Long sessionId;
 
-    @Column(name = "user_id", nullable = false)
-    private Long userId;
+    @Column(name = "user_num", nullable = false)
+    private Long userNum;
 
     @Column(name = "analysis_id")
     private Long analysisId;

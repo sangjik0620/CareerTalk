@@ -16,8 +16,8 @@ public class FileEntity {
     @Column(name = "file_id")
     private Long fileId;
 
-    @Column(name = "user_id", nullable = false)
-    private Long userId;
+    @Column(name = "user_num", nullable = false)
+    private Long userNum;
 
     // RESUME / ESSAY / PORTFOLIO / AUDIO
     @Column(name = "file_type", nullable = false)

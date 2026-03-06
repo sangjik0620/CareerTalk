@@ -67,7 +67,7 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
     SELECT ie.overall_score
     FROM interview_sessions s
     JOIN interview_evaluations ie ON ie.session_id = s.session_id
-    WHERE s.user_id = :userId
+    WHERE s.user_num = :userNum
       AND ie.analysis_status = 'DONE'
       AND ie.overall_score IS NOT NULL
       AND s.created_at < :createdAt
@@ -111,7 +111,7 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
     SELECT DATE_FORMAT(s.created_at, '%Y-%m') AS ym, e.overall_score AS score
     FROM interview_sessions s
     JOIN interview_evaluations e ON e.session_id = s.session_id
-    WHERE s.user_id = :userId
+    WHERE s.user_num = :userNum
       AND e.analysis_status = 'DONE'
       AND e.overall_score IS NOT NULL
     ORDER BY s.created_at DESC
@@ -123,7 +123,7 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
     SELECT e.result_json
     FROM interview_sessions s
     JOIN interview_evaluations e ON e.session_id = s.session_id
-    WHERE s.user_id = :userId
+    WHERE s.user_num = :userNum
       AND s.created_at < :createdAt
       AND e.analysis_status = 'DONE'
       AND e.result_json IS NOT NULL
