@@ -93,7 +93,7 @@ public class ResumeService {
             byte[] hash = digest.digest(s3Key.getBytes(StandardCharsets.UTF_8));
 
             FileEntity fileEntity = new FileEntity();
-            fileEntity.setUserId(currentUserId);
+            fileEntity.setUserNum(currentUserId);
             fileEntity.setFileType("RESUME");
             fileEntity.setOriginalName(file.getOriginalFilename());
             fileEntity.setMimeType(file.getContentType());
@@ -120,7 +120,7 @@ public class ResumeService {
 
         // 5. ResumeEntity 저장
         ResumeEntity resume = ResumeEntity.builder()
-                .userId(currentUserId)
+                .userNum(currentUserId)
                 .fileId(fileId)
                 .resumeTitle(file.getOriginalFilename())
                 .status("ACTIVE")
@@ -166,7 +166,7 @@ public class ResumeService {
         ResumeEntity resume = resumeRepository.findById(resumeId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "resumeId에 해당하는 이력서를 찾을 수 없습니다."));
 
-        if (currentUserId != null && !currentUserId.equals(resume.getUserId())) {
+        if (currentUserId != null && !currentUserId.equals(resume.getUserNum())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "본인 이력서만 조회할 수 있습니다.");
         }
         return parseResumeTextByFileId(resume.getFileId(), currentUserId);
@@ -176,7 +176,7 @@ public class ResumeService {
         FileEntity file = fileRepository.findById(fileId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "fileId에 해당하는 파일을 찾을 수 없습니다."));
 
-        if (currentUserId != null && !currentUserId.equals(file.getUserId())) {
+        if (currentUserId != null && !currentUserId.equals(file.getUserNum())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "본인 파일만 조회할 수 있습니다.");
         }
         if (StringUtils.hasText(file.getFileType()) && !"RESUME".equalsIgnoreCase(file.getFileType())) {
@@ -236,7 +236,7 @@ public class ResumeService {
             String feedbackJson          = root.get("feedback").toString();
 
             AnalysisEntity analysis = AnalysisEntity.builder()
-                    .userId(userId)
+                    .userNum(userId)
                     .targetType("RESUME")
                     .targetId(resumeId)
                     .targetJob(jobCategory)

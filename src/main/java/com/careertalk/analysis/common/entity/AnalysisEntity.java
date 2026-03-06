@@ -23,8 +23,8 @@ public class AnalysisEntity {
     @Column(name = "analysis_id")
     private Long analysisId;
 
-    @Column(name = "user_id", nullable = false)
-    private Long userId;
+    @Column(name = "user_num", nullable = false)
+    private Long userNum;
 
     @Column(name = "target_type", nullable = false, length = 20)
     private String targetType;
@@ -80,12 +80,12 @@ public class AnalysisEntity {
     private LocalDateTime updatedAt;
 
     @Builder
-    public AnalysisEntity(Long userId, String targetType, Long targetId, String targetJob,
+    public AnalysisEntity(Long userNum, String targetType, Long targetId, String targetJob,
                           Integer overallScore, String scoreJson, String ruleResultJson,
                           String oneLineReview, String summaryDetail, String expectedQuestionsJson,
                           String modelName, String modelVersion, String promptVersion,
                           String status, String errorMessage, LocalDateTime analyzedAt) {
-        this.userId = userId;
+        this.userNum = userNum;
         this.targetType = targetType;
         this.targetId = targetId;
         this.targetJob = targetJob;

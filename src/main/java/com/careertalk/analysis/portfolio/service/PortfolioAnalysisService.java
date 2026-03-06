@@ -83,7 +83,7 @@ public class PortfolioAnalysisService {
             byte[] hash = digest.digest(s3Key.getBytes(StandardCharsets.UTF_8));
 
             FileEntity fileEntity = new FileEntity();
-            fileEntity.setUserId(currentUserId);
+            fileEntity.setUserNum(currentUserId);
             fileEntity.setFileType("PORTFOLIO");
             fileEntity.setOriginalName(file.getOriginalFilename());
             fileEntity.setMimeType(file.getContentType());
@@ -105,7 +105,7 @@ public class PortfolioAnalysisService {
         List<String> base64Images = fileParserUtil.extractImagesAsBase64(file);
 
         PortfolioEntity portfolio = PortfolioEntity.builder()
-                .userId(currentUserId)
+                .userNum(currentUserId)
                 .fileId(realFileId)
                 .title(file.getOriginalFilename())
                 .extractedText(extractedText)
@@ -172,7 +172,7 @@ public class PortfolioAnalysisService {
         // 에러 상황일 때 빈 값으로 저장
         if ("FAILED".equals(status)) {
             AnalysisEntity failedAnalysis = AnalysisEntity.builder()
-                    .userId(userId)
+                    .userNum(userId)
                     .targetType("PORTFOLIO")
                     .targetId(portfolioId)
                     .targetJob(jobCategory)
@@ -199,7 +199,7 @@ public class PortfolioAnalysisService {
             String questionsJsonStr = rootNode.get("expectedQuestionsJson").toString();
 
             AnalysisEntity analysis = AnalysisEntity.builder()
-                    .userId(userId)
+                    .userNum(userId)
                     .targetType("PORTFOLIO")
                     .targetId(portfolioId)
                     .targetJob(jobCategory)

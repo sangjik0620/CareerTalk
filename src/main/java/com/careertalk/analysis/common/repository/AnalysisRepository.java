@@ -11,7 +11,7 @@ public interface AnalysisRepository extends JpaRepository<AnalysisEntity, Long> 
 
     Optional<AnalysisEntity> findFirstByTargetIdOrderByAnalysisIdDesc(Long targetId);
 
-    Optional<AnalysisEntity> findTopByUserIdAndTargetTypeAndTargetIdOrderByAnalyzedAtDesc(
-            Long userId, String targetType, Long targetId
+    Optional<AnalysisEntity> findTopByUserNumAndTargetTypeAndTargetIdOrderByAnalyzedAtDesc(
+            Long userNum, String targetType, Long targetId
     );
 }

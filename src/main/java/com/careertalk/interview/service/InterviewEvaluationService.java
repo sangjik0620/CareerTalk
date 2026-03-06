@@ -414,7 +414,7 @@ public class InterviewEvaluationService {
         // 1) 이전 점수
         Integer prev = null;
         if (session.getCreatedAt() != null) {
-            prev = evaluationRepository.findPrevOverallScore(session.getUserId(), session.getCreatedAt());
+            prev = evaluationRepository.findPrevOverallScore(session.getUserNum(), session.getCreatedAt());
         }
         summary.put("previousScore", prev == null ? overall : prev);
 
@@ -701,7 +701,7 @@ public class InterviewEvaluationService {
 
         var histArr = comp.putArray("scoreHistory");
         try {
-            var rows = evaluationRepository.findRecentScoreHistory(session.getUserId(), 6);
+            var rows = evaluationRepository.findRecentScoreHistory(session.getUserNum(), 6);
             java.util.Collections.reverse(rows);
             for (Object[] r : rows) {
                 String ym = String.valueOf(r[0]);
@@ -725,7 +725,7 @@ public class InterviewEvaluationService {
 
         String prevJson = null;
         try {
-            prevJson = evaluationRepository.findPrevResultJson(session.getUserId(), session.getCreatedAt());
+            prevJson = evaluationRepository.findPrevResultJson(session.getUserNum(), session.getCreatedAt());
         } catch (Exception ignored) {
         }
 
