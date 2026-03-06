@@ -63,13 +63,23 @@ public class PortfolioAnalysisService {
     @Value("${ai.prompt.version}")
     private String aiPromptVersion;
 
+    /**
+     * 포트폴리오 분석 및 저장 메인 로직
+     */
     @Transactional(noRollbackFor = RuntimeException.class)
     public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String jobCategory, String detailedPosition) {
 
-        Long currentUserId = 1L;
+        // 🚨 임시 사용자 ID (로그인 연동 전까지 1L 고정)
+        final Long currentUserId = 1L;
+
+        // [룰 기반 검증 1] PDF 확장자 체크
+        String originalFilename = file.getOriginalFilename();
+        if (originalFilename == null || !originalFilename.toLowerCase().endsWith(".pdf")) {
+            throw new RuntimeException("현재는 PDF 형식의 포트폴리오만 분석이 가능합니다.");
+        }
 
         // 1. S3에 파일 업로드
-        String s3Key = "";
+        String s3Key;
         try {
             s3Key = s3Service.uploadFile(file, currentUserId);
         } catch (IOException e) {
@@ -85,7 +95,7 @@ public class PortfolioAnalysisService {
             FileEntity fileEntity = new FileEntity();
             fileEntity.setUserNum(currentUserId);
             fileEntity.setFileType("PORTFOLIO");
-            fileEntity.setOriginalName(file.getOriginalFilename());
+            fileEntity.setOriginalName(originalFilename);
             fileEntity.setMimeType(file.getContentType());
             fileEntity.setFileSize(file.getSize());
             fileEntity.setS3Bucket(s3BucketName);
@@ -100,76 +110,104 @@ public class PortfolioAnalysisService {
             throw new RuntimeException("파일 정보 저장 중 오류가 발생했습니다.");
         }
 
-        // 3. 텍스트 및 이미지 추출
+        // 3. 텍스트 추출 및 PortfolioEntity 선저장
         String extractedText = fileParserUtil.extractText(file);
-        List<String> base64Images = fileParserUtil.extractImagesAsBase64(file);
 
         PortfolioEntity portfolio = PortfolioEntity.builder()
                 .userNum(currentUserId)
                 .fileId(realFileId)
-                .title(file.getOriginalFilename())
+                .title(originalFilename)
                 .extractedText(extractedText)
                 .status("ACTIVE")
                 .build();
         portfolioRepository.save(portfolio);
 
+        // 🚨 [룰 기반 검증 2] 추출된 텍스트 기반 '입구 컷' (분량 미달 등)
+        String ruleBasedFailReason = validateExtractedText(extractedText);
+        if (ruleBasedFailReason != null) {
+            log.warn("룰 기반 검증 실패: {} - AI 호출을 중단합니다.", ruleBasedFailReason);
+            return createRuleBasedFailResponse(ruleBasedFailReason, currentUserId, portfolio.getPortfolioId(), jobCategory);
+        }
+
+        // 4. 이미지 추출 (PDF 전용)
+        List<String> base64Images = fileParserUtil.extractImagesAsBase64(file);
+
+        // 5. 프롬프트 조합
         String systemPrompt = getSystemPrompt();
         String targetJobData = (detailedPosition != null && !detailedPosition.isBlank())
                 ? jobCategory + " (" + detailedPosition + ")"
                 : jobCategory;
         String userPrompt = "지원 직무: " + targetJobData + "\n\n포트폴리오 내용:\n" + extractedText;
 
-        // ⭐ 4. AI 통신 (try-catch로 감싸서 실패 처리)
+        // 6. AI 통신 및 결과 처리
         try {
-            log.info("AI 분석 시작... (직무: {})", targetJobData);
+            log.info("AI 분석 시작... (타겟: {})", targetJobData);
             String aiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, base64Images);
             log.info("AI 분석 완료!");
 
-            // 성공 시 SUCCESS 처리
             return processAndSaveAiResult(aiResultJson, currentUserId, portfolio.getPortfolioId(), jobCategory, "SUCCESS", null);
 
         } catch (Exception e) {
             log.error("AI 분석 중 에러 발생: {}", e.getMessage());
-
-            // 실패 시 DB에 에러 메시지 저장 (status: FAIL)
             processAndSaveAiResult(null, currentUserId, portfolio.getPortfolioId(), jobCategory, "FAILED", e.getMessage());
-
-            // 프론트엔드로 에러 던지기
-            throw new RuntimeException("AI 분석 서비스에 장애가 발생했습니다. 잠시 후 다시 시도해주세요.");
+            throw new RuntimeException("AI 분석 서비스 장애가 발생했습니다. 잠시 후 다시 시도해 주세요.");
         }
     }
 
-    @Transactional(readOnly = true)
-    public PortfolioAnalysisResponse getAnalysisResult(Long analysisId) {
-        AnalysisEntity analysis = analysisRepository.findById(analysisId)
-                .orElseThrow(() -> new RuntimeException("해당 포트폴리오의 분석 결과를 찾을 수 없습니다."));
-
-        // 만약 분석 실패(FAIL) 건을 조회하려 한다면 프론트엔드에 빈 객체나 에러를 던져야 합니다.
-        if ("FAILED".equals(analysis.getStatus())) {
-            throw new RuntimeException("이 분석은 실패한 기록입니다. 에러 원인: " + analysis.getErrorMessage());
+    /**
+     * 텍스트 유효성 검사 (입구 컷 룰)
+     */
+    private String validateExtractedText(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return "파일에서 텍스트를 추출할 수 없습니다. (스캔된 이미지 위주의 PDF일 가능성)";
         }
+        // 공백 제외 글자 수 체크
+        String noSpaceText = text.replaceAll("\\s+", "");
+        if (noSpaceText.length() < 100) {
+            return "내용이 너무 짧습니다. (최소 100자 이상의 설명 텍스트 필요)";
+        }
+        return null;
+    }
 
+    /**
+     * 룰 기반 검증 실패 시 응답 생성 (DB 저장 포함)
+     */
+    private PortfolioAnalysisResponse createRuleBasedFailResponse(String reason, Long userId, Long portfolioId, String jobCategory) {
+        String scoreJsonStr = "{\"직무 적합성\":0, \"문제 해결력\":0, \"성장 잠재력\":0, \"협업·소통\":0, \"프로젝트 완성도\":0}";
+        String ruleResultJson = String.format("{\"isPassed\": false, \"failReason\": \"%s\"}", reason);
+
+        AnalysisEntity analysis = AnalysisEntity.builder()
+                .userNum(userId)
+                .targetType("PORTFOLIO")
+                .targetId(portfolioId)
+                .targetJob(jobCategory)
+                .overallScore(0)
+                .scoreJson(scoreJsonStr)
+                .expectedQuestionsJson("[]")
+                .ruleResultJson(ruleResultJson)
+                .oneLineReview("❌ 분석 불가: " + reason)
+                .summaryDetail("시스템 1차 검증 결과, 포트폴리오의 실체적인 내용이 부족하여 AI 분석을 진행할 수 없습니다. 직무 역량을 보여줄 수 있는 텍스트 설명을 보강하여 다시 업로드해 주세요.")
+                .status("SUCCESS") // 프론트엔드 UI 처리를 위해 SUCCESS로 저장 (점수 0점 노출)
+                .modelName("RULE_BASED_FILTER")
+                .modelVersion("1.0")
+                .promptVersion("N/A")
+                .analyzedAt(java.time.LocalDateTime.now())
+                .build();
+
+        AnalysisEntity savedAnalysis = analysisRepository.save(analysis);
         try {
-            return convertToResponseDto(analysis);
+            return convertToResponseDto(savedAnalysis);
         } catch (JsonProcessingException e) {
-            log.error("JSON 파싱 에러", e);
-            throw new RuntimeException("분석 결과를 불러오는 중 오류가 발생했습니다.");
+            throw new RuntimeException("응답 변환 오류");
         }
     }
 
-    private String getSystemPrompt() {
-        try {
-            return StreamUtils.copyToString(systemPromptResource.getInputStream(), StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            log.error("프롬프트 파일 읽기 실패", e);
-            throw new RuntimeException("서버 설정 오류로 분석을 시작할 수 없습니다.");
-        }
-    }
-
-
+    /**
+     * AI 응답 결과 파싱 및 DB 저장
+     */
     private PortfolioAnalysisResponse processAndSaveAiResult(String aiResultJson, Long userId, Long portfolioId, String jobCategory, String status, String errorMessage) {
 
-        // 에러 상황일 때 빈 값으로 저장
+        // 분석 실패(API 에러 등) 시 기록
         if ("FAILED".equals(status)) {
             AnalysisEntity failedAnalysis = AnalysisEntity.builder()
                     .userNum(userId)
@@ -178,38 +216,29 @@ public class PortfolioAnalysisService {
                     .targetJob(jobCategory)
                     .status("FAILED")
                     .errorMessage(errorMessage)
-                    .modelName(aiModelName)
-                    .modelVersion(aiModelVersion)
-                    .promptVersion(aiPromptVersion)
                     .analyzedAt(java.time.LocalDateTime.now())
                     .build();
-
             analysisRepository.save(failedAnalysis);
             return null;
         }
 
-        // 성공 상황일 때 파싱해서 저장
+        // 분석 성공 시 파싱 및 저장
         try {
             JsonNode rootNode = objectMapper.readTree(aiResultJson);
-
-            int overallScore = rootNode.get("overallScore").asInt();
-            String oneLineReview = rootNode.get("oneLineReview").asText();
-            String summaryDetail = rootNode.get("summaryDetail").asText();
-            String scoreJsonStr = rootNode.get("scoreJson").toString();
-            String questionsJsonStr = rootNode.get("expectedQuestionsJson").toString();
+            String ruleResultJson = "{\"isPassed\": true, \"failReason\": null}";
 
             AnalysisEntity analysis = AnalysisEntity.builder()
                     .userNum(userId)
                     .targetType("PORTFOLIO")
                     .targetId(portfolioId)
                     .targetJob(jobCategory)
-                    .overallScore(overallScore)
-                    .scoreJson(scoreJsonStr)
-                    .expectedQuestionsJson(questionsJsonStr)
-                    .oneLineReview(oneLineReview)
-                    .summaryDetail(summaryDetail)
+                    .overallScore(rootNode.get("overallScore").asInt())
+                    .scoreJson(rootNode.get("scoreJson").toString())
+                    .expectedQuestionsJson(rootNode.get("expectedQuestionsJson").toString())
+                    .ruleResultJson(ruleResultJson)
+                    .oneLineReview(rootNode.get("oneLineReview").asText())
+                    .summaryDetail(rootNode.get("summaryDetail").asText())
                     .status("SUCCESS")
-                    .errorMessage(null)
                     .modelName(aiModelName)
                     .modelVersion(aiModelVersion)
                     .promptVersion(aiPromptVersion)
@@ -217,15 +246,47 @@ public class PortfolioAnalysisService {
                     .build();
 
             AnalysisEntity savedAnalysis = analysisRepository.save(analysis);
-
             return convertToResponseDto(savedAnalysis);
 
         } catch (Exception e) {
-            log.error("AI 응답 결과 처리 중 에러 발생", e);
-            throw new RuntimeException("분석 결과를 저장하는 중 오류가 발생했습니다.");
+            log.error("JSON 파싱 및 저장 중 에러", e);
+            throw new RuntimeException("분석 결과를 처리하는 중 오류가 발생했습니다.");
         }
     }
 
+    /**
+     * 분석 결과 조회
+     */
+    @Transactional(readOnly = true)
+    public PortfolioAnalysisResponse getAnalysisResult(Long analysisId) {
+        AnalysisEntity analysis = analysisRepository.findById(analysisId)
+                .orElseThrow(() -> new RuntimeException("결과를 찾을 수 없습니다."));
+
+        if ("FAILED".equals(analysis.getStatus())) {
+            throw new RuntimeException("분석 실패 기록입니다: " + analysis.getErrorMessage());
+        }
+
+        try {
+            return convertToResponseDto(analysis);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("데이터 변환 오류");
+        }
+    }
+
+    /**
+     * 시스템 프롬프트 로드
+     */
+    private String getSystemPrompt() {
+        try {
+            return StreamUtils.copyToString(systemPromptResource.getInputStream(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new RuntimeException("프롬프트 파일을 읽을 수 없습니다.");
+        }
+    }
+
+    /**
+     * 엔티티 -> DTO 변환 (차트 데이터 가공 포함)
+     */
     private PortfolioAnalysisResponse convertToResponseDto(AnalysisEntity analysis) throws JsonProcessingException {
         List<QuestionDto> questionList = objectMapper.readValue(
                 analysis.getExpectedQuestionsJson(), new TypeReference<>() {}
