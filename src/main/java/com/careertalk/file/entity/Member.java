@@ -36,7 +36,7 @@ public class Member {
     @Column(unique = true, length = 255, nullable = false)
     private String email;
 
-    @Column(unique = true, length = 30) // DB 색인(Index) 사진에 유니크 설정이 있으므로 추가
+    @Column(length = 30) // DB 색인(Index) 사진에 유니크 설정이 있으므로 추가
     private String phone;
 
     @Column(name = "birth_date")

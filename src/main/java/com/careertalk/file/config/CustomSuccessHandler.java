@@ -1,7 +1,7 @@
 package com.careertalk.file.config;
 
 import com.careertalk.file.entity.Member;
-import com.careertalk.file.repository.MemberRepository; // 본인의 Repository 경로
+import com.careertalk.file.repository.MemberRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.core.user.OAuth2User;
@@ -13,6 +13,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 
 @Component
 @RequiredArgsConstructor
@@ -26,34 +27,47 @@ public class CustomSuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
 
         OAuth2User oAuth2User = (OAuth2User) authentication.getPrincipal();
         String email = (String) oAuth2User.getAttributes().get("email");
+        String loginId = (String) oAuth2User.getAttributes().get("loginId");
 
-        // 1. DB에서 해당 이메일로 가입된 회원이 있는지 확인
-        boolean isExist = memberRepository.findByEmail(email).isPresent();
+        // 1. 해당 소셜 계정(loginId)으로 이미 가입된 회원인지 확인
+        Optional<Member> memberByLoginId = memberRepository.findByLoginId(loginId);
 
         String targetUrl;
-        if (isExist) {
-            // 2-A. 기존 회원인 경우 -> 메인 화면으로 이동하며 정보 전달
-            Member member = memberRepository.findByEmail(email).get(); // DB에서 회원 정보 가져오기
 
+        if (memberByLoginId.isPresent()) {
+            // [기존 소셜 계정 유저] -> 메인 화면으로 이동
+            Member member = memberByLoginId.get();
             targetUrl = UriComponentsBuilder.fromUriString("http://localhost:5173/")
                     .queryParam("loginSuccess", true)
                     .queryParam("email", member.getEmail())
-                    .queryParam("nickname", member.getNickname()) // 리액트가 환영 메시지에 쓸 닉네임
-                    .queryParam("targetJob", member.getTargetJob())
+                    .queryParam("nickname", member.getNickname())
+                    .queryParam("name", member.getName())
                     .build()
                     .encode(StandardCharsets.UTF_8)
                     .toUriString();
         } else {
-            // 2-B. 신규 회원인 경우 -> 추가 정보 입력 페이지로 이동 (전화번호 포함)
-            targetUrl = UriComponentsBuilder.fromUriString("http://localhost:5173/social-signup")
-                    .queryParam("email", email)
-                    .queryParam("name", (String) oAuth2User.getAttributes().get("name"))
-                    .queryParam("loginId", (String) oAuth2User.getAttributes().get("loginId"))
-                    .queryParam("phone", (String) oAuth2User.getAttributes().get("phone")) // 전화번호 전달
-                    .queryParam("birthDate", (String) oAuth2User.getAttributes().get("birthDate"))
-                    .build()
-                    .encode(StandardCharsets.UTF_8)
-                    .toUriString();
+            // [신규 소셜 시도] 이메일이 이미 다른 계정으로 등록되어 있는지 확인
+            Optional<Member> memberByEmail = memberRepository.findByEmail(email);
+
+            if (memberByEmail.isPresent()) {
+                // ⭐ 이메일 중복 발생! -> 로그인 페이지로 리다이렉트하며 에러 코드 전달
+                targetUrl = UriComponentsBuilder.fromUriString("http://localhost:5173/login")
+                        .queryParam("error", "duplicate_email")
+                        .build()
+                        .encode(StandardCharsets.UTF_8)
+                        .toUriString();
+            } else {
+                // [진짜 신규 유저] -> 회원가입 페이지로 이동
+                targetUrl = UriComponentsBuilder.fromUriString("http://localhost:5173/social-signup")
+                        .queryParam("email", email)
+                        .queryParam("loginId", loginId)
+                        .queryParam("name", (String) oAuth2User.getAttributes().get("name"))
+                        .queryParam("phone", (String) oAuth2User.getAttributes().get("phone"))
+                        .queryParam("birthDate", (String) oAuth2User.getAttributes().get("birthDate"))
+                        .build()
+                        .encode(StandardCharsets.UTF_8)
+                        .toUriString();
+            }
         }
 
         getRedirectStrategy().sendRedirect(request, response, targetUrl);

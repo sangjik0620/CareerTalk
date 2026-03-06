@@ -43,9 +43,7 @@ public class MemberService {
         return "회원가입 성공";
     }
 
-    /**
-     * 일반 로그인
-     */
+    /* 일반 로그인 */
     public Member login(LoginRequestDTO loginRequestDTO) {
         // 1. 이메일로 사용자 조회
         Member user = memberRepository.findByLoginId(loginRequestDTO.getLoginId())
@@ -61,12 +59,21 @@ public class MemberService {
     }
 
     public Member socialSignupComplete(SocialSignupRequestDTO dto) {
-        // 1. 이미 가입된 이메일인지 한 번 더 확인
-        if (memberRepository.findByEmail(dto.getEmail()).isPresent()) {
+        // 1. 이메일 중복 체크
+//        if (memberRepository.findByLoginId(dto.getLoginId()).isPresent()) {
+//            throw new RuntimeException("이미 가입된 계정입니다.");
+//        }
+
+        if (memberRepository.findByLoginId(dto.getLoginId()).isPresent()) {
             throw new RuntimeException("이미 가입된 계정입니다.");
         }
 
-        // 2. 엔티티 변환
+        // 2. 닉네임 중복 체크
+        if (memberRepository.findByNickname(dto.getNickname()).isPresent()) {
+            throw new RuntimeException("이미 사용 중인 닉네임입니다.");
+        }
+
+        // 3. 엔티티 변환
         Member user = Member.builder()
                 .loginId(dto.getLoginId())
                 .email(dto.getEmail())
@@ -75,13 +82,34 @@ public class MemberService {
                 .phone(dto.getPhone())
                 .birthDate(dto.getBirthDate())
                 .targetJob(dto.getTargetJob())
-                // ⭐ 중요: 소셜 로그인은 비밀번호가 없지만 DB 제약조건(NOT NULL) 때문에 임의값 입력
                 .password(passwordEncoder.encode("SOCIAL_AUTH_" + java.util.UUID.randomUUID()))
                 .status("ACTIVE")
                 .build();
 
-        // 3. DB 저장 및 저장된 객체 반환
         return memberRepository.save(user);
+    }
+
+    @Transactional
+    public void deleteMember(String email) {
+        Member member = memberRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("존재하지 않는 회원입니다."));
+        memberRepository.delete(member);
+    }
+
+    @Transactional(readOnly = true)
+    public boolean checkLoginIdDuplicate(String loginId) {
+        return memberRepository.findByLoginId(loginId).isPresent();
+    }
+
+    @Transactional(readOnly = true)
+    public boolean checkNicknameDuplicate(String nickname) {
+        return memberRepository.findByNickname(nickname).isPresent();
+    }
+
+    // MemberService.java 내부
+    @Transactional(readOnly = true)
+    public Member findByLoginId(String loginId) {
+        return memberRepository.findByLoginId(loginId).orElse(null);
     }
 
 }

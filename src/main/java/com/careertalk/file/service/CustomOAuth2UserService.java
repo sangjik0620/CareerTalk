@@ -1,5 +1,10 @@
 package com.careertalk.file.service;
 
+import com.careertalk.file.dto.GoogleUserInfo;
+import com.careertalk.file.dto.NaverUserInfo;
+import com.careertalk.file.dto.KakaoUserInfo;
+import com.careertalk.file.dto.OAuth2UserInfo;
+import com.careertalk.file.entity.Member;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService;
@@ -18,39 +23,62 @@ import java.util.Map;
 public class CustomOAuth2UserService extends DefaultOAuth2UserService {
 
     private final GooglePeopleService googlePeopleService;
+    private final MemberService memberService;
+    private String loginId;
 
     @Override
     public OAuth2User loadUser(OAuth2UserRequest userRequest) throws OAuth2AuthenticationException {
-        // 1. 구글의 기본 정보(이메일, 이름 등)를 가져옵니다.
         OAuth2User oAuth2User = super.loadUser(userRequest);
+        String provider = userRequest.getClientRegistration().getRegistrationId();
 
-        // 2. 가공을 위해 기존 attributes를 새로운 Map에 복사합니다.
+        String userNameAttributeName = userRequest.getClientRegistration()
+                .getProviderDetails().getUserInfoEndpoint().getUserNameAttributeName();
+
         Map<String, Object> attributes = new HashMap<>(oAuth2User.getAttributes());
 
-        // 3. 구글 액세스 토큰을 추출하여 People API 호출 준비를 합니다.
-        String accessToken = userRequest.getAccessToken().getTokenValue();
-
-        // 4. 1번 파일(GooglePeopleService)을 사용하여 전화번호와 생년월일을 가져옵니다.
-        Map<String, String> extraInfo = googlePeopleService.getExtraInfo(accessToken);
-
-        // 5. 가져온 추가 정보가 있다면 attributes 맵에 추가합니다.
-        if (extraInfo.containsKey("phone")) {
-            attributes.put("phone", extraInfo.get("phone"));
-        }
-        if (extraInfo.containsKey("birthDate")) {
-            attributes.put("birthDate", extraInfo.get("birthDate"));
+        // 1. 구글일 경우에만 People API 호출 (추가 정보 획득)
+        if (provider.equals("google")) {
+            String accessToken = userRequest.getAccessToken().getTokenValue();
+            Map<String, String> extraInfo = googlePeopleService.getExtraInfo(accessToken);
+            if (extraInfo.get("phone") != null) attributes.put("phone", extraInfo.get("phone"));
+            if (extraInfo.get("birthDate") != null) attributes.put("birthDate", extraInfo.get("birthDate"));
         }
 
-        // 6. ⭐ 핵심: [Column 'login_id' cannot be null] 에러 해결 로직
-        // DB의 login_id 컬럼은 필수이므로, 구글 고유 식별자(sub)를 활용해 자동으로 채워줍니다.
-        String sub = (String) attributes.get("sub");
-        attributes.put("loginId", "google_" + sub); // DB에 들어갈 login_id 값 생성
+        // 2. 소셜별 userInfo 객체 생성
+        OAuth2UserInfo userInfo = null;
+        if (provider.equals("google")) {
+            userInfo = new GoogleUserInfo(attributes);
+        } else if (provider.equals("naver")) {
+            userInfo = new NaverUserInfo(oAuth2User.getAttributes());
+        } else if (provider.equals("kakao")) {
+            userInfo = new KakaoUserInfo(oAuth2User.getAttributes());
+        }
 
-        // 7. 최종적으로 권한과 가공된 정보를 담은 OAuth2User 객체를 반환합니다.
+        // 3. SocialSignupRequestDTO와 DB의 loginId를 위한 공통 값 설정
+        String loginId = userInfo.getProvider() + "_" + userInfo.getProviderId();
+        attributes.put("email", userInfo.getEmail());
+        attributes.put("name", userInfo.getName());
+        attributes.put("phone", userInfo.getPhone());
+        attributes.put("birthDate", userInfo.getBirthDate());
+        attributes.put("loginId", loginId);
+
+        // 4. 이메일이 아닌 loginId로 기존 회원 여부 판단
+        Member member = memberService.findByLoginId(loginId);
+
+        if (member == null) {
+            // DB에 해당 loginId가 없으면 신규 유저
+            attributes.put("isNewUser", true);
+        } else {
+            // DB에 있으면 기존 유저 (이메일이 같아도 loginId가 다르면 여기 안 들어옴)
+            attributes.put("isNewUser", false);
+            // 기존 유저의 경우 DB에 저장된 실제 정보를 attributes에 덮어씌울 수도 있습니다.
+            attributes.put("nickname", member.getNickname());
+        }
+
         return new DefaultOAuth2User(
                 Collections.singleton(new SimpleGrantedAuthority("ROLE_USER")),
                 attributes,
-                "email" // 고유 식별 키를 email로 설정
+                userNameAttributeName
         );
     }
 }
