@@ -2,117 +2,207 @@ package com.careertalk.interview.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
+import java.nio.charset.StandardCharsets;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class InterviewOpenAiService {
 
     private final ObjectMapper objectMapper;
 
-    /**
-     * 네가 가진 설정:
-     * openai.api-key=${INTERVIEW_AI_API_KEY}
-     *
-     * 기존 파트(CI)는 ai.api-key/ai.api-url을 쓰므로,
-     * 둘 중 뭐가 있어도 동작하게 fallback을 걸어둠.
-     */
-    @Value("${openai.api-key:${ai.api-key:}}")
+    @Value("${openai.api-key}")
     private String apiKey;
 
-    /**
-     * CI 파트는 ai.api-url을 사용. :contentReference[oaicite:3]{index=3}
-     * 인터뷰는 openai.api-url로 따로 줄 수도 있으니 fallback.
-     * 기본값은 OpenAI Responses API endpoint.
-     */
-    @Value("${openai.api-url:${ai.api-url:https://api.openai.com/v1/responses}}")
+    @Value("${ai.api-url}")
     private String apiUrl;
 
-    @Value("${openai.model:gpt-4.1-mini}")
+    @Value("${ai.model.name}")
     private String model;
 
     /**
-     * "반드시 JSON만 출력"하도록 강하게 유도한 프롬프트를 넣고,
-     * 모델이 반환한 텍스트를 JSON으로 파싱해서 돌려준다.
+     * JSON-only 결과가 필요할 때 사용.
+     * - 모델 출력 텍스트를 JSON 파싱
+     * - 파싱 실패하면 {error, raw}를 리턴 (서버 템플릿 대체 금지)
      */
-    public JsonNode callJsonOnly(String systemPrompt, String userPrompt) throws IOException {
-        String prompt = "SYSTEM:\n" + safe(systemPrompt) + "\n\nUSER:\n" + safe(userPrompt);
+    public JsonNode callJsonOnly(String systemPrompt, String userPrompt) {
+        String text = callText(systemPrompt, userPrompt);
 
-        JsonNode raw = callOpenAiRaw(prompt);
+        String cleaned = normalizeModelText(text);
 
-        // callOpenAiRaw는 모델 output 텍스트를 꺼내왔고,
-        // 그 텍스트가 JSON 문자열이라고 가정하고 다시 parse 해서 리턴함.
-        return raw;
+        try {
+            return objectMapper.readTree(cleaned);
+        } catch (Exception e) {
+            log.warn("[LLM] JSON parse failed. model={}, rawPreview={}",
+                    model, shorten(cleaned, 300));
+            ObjectNode err = objectMapper.createObjectNode();
+            err.put("error", "LLM returned non-JSON or invalid JSON");
+            err.put("raw", cleaned);
+            return err;
+        }
     }
 
     /**
-     * CI 파트와 동일한 방식:
-     * - RestTemplate POST
-     * - root.output[0].content[0].text 추출
-     * - 그 text를 JSON으로 다시 parse
-     *
-     * (CI의 callOpenAiRaw 패턴 그대로) :contentReference[oaicite:4]{index=4}
+     * Responses API 호출 -> 모델 출력 텍스트 반환
+     * - input을 메시지 배열 형태로 전송
+     * - output_text 우선, 없으면 output[].content[].text 합침
      */
-    private JsonNode callOpenAiRaw(String prompt) throws IOException {
-        if (apiKey == null || apiKey.isBlank()) {
-            throw new IllegalStateException("openai.api-key (or ai.api-key)가 설정되지 않았습니다.");
-        }
-        if (apiUrl == null || apiUrl.isBlank()) {
-            throw new IllegalStateException("openai.api-url (or ai.api-url)가 설정되지 않았습니다.");
-        }
+    public String callText(String systemPrompt, String userPrompt) {
+        ensureConfig();
 
-        RestTemplate restTemplate = new RestTemplate();
+        RestTemplate rt = new RestTemplate();
 
-        Map<String, Object> body = new HashMap<>();
+        ObjectNode body = objectMapper.createObjectNode();
         body.put("model", model);
-        body.put("input", prompt);
+
+        ArrayNode input = body.putArray("input");
+        input.add(message("system", systemPrompt));
+        input.add(message("user", userPrompt));
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setBearerAuth(apiKey);
 
-        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
-        ResponseEntity<String> response = restTemplate.postForEntity(apiUrl, entity, String.class);
-
-        String responseBody = response.getBody();
-        if (responseBody == null || responseBody.isBlank()) {
-            throw new IllegalStateException("OpenAI 응답이 비어있습니다.");
+        String reqJson;
+        try {
+            reqJson = objectMapper.writeValueAsString(body);
+        } catch (Exception e) {
+            throw new IllegalStateException("serialize request failed", e);
         }
 
-        JsonNode root = objectMapper.readTree(responseBody);
+        // ✅ 핵심 로그: 호출 여부/중복 여부 확인용
+        log.info("[LLM] OpenAI request start. model={}, url={}, payloadBytes={}",
+                model, apiUrl, reqJson.getBytes(StandardCharsets.UTF_8).length);
 
-        if (root.has("error") && !root.get("error").isNull()) {
-            throw new IllegalStateException("OpenAI ERROR: " + root.get("error").toString());
+        ResponseEntity<String> res;
+        try {
+            res = rt.exchange(
+                    apiUrl,
+                    HttpMethod.POST,
+                    new HttpEntity<>(reqJson, headers),
+                    String.class
+            );
+        } catch (RestClientException e) {
+            log.error("[LLM] OpenAI HTTP call failed. model={}, url={}, err={}",
+                    model, apiUrl, e.toString());
+            throw new IllegalStateException("OpenAI HTTP call failed: " + e.getMessage(), e);
         }
 
-        JsonNode outputNode = root.path("output");
-        if (!outputNode.isArray() || outputNode.isEmpty()) {
-            throw new IllegalStateException("OpenAI 응답 구조 이상 (output 없음)");
+        String resBody = res.getBody();
+        if (resBody == null || resBody.isBlank()) {
+            throw new IllegalStateException("OpenAI response body is empty");
         }
 
-        JsonNode contentNode = outputNode.get(0).path("content");
-        if (!contentNode.isArray() || contentNode.isEmpty()) {
-            throw new IllegalStateException("OpenAI 응답 구조 이상 (content 없음)");
-        }
+        try {
+            JsonNode root = objectMapper.readTree(resBody);
 
-        String outputText = contentNode.get(0).path("text").asText();
-        if (outputText == null || outputText.isBlank()) {
-            throw new IllegalStateException("GPT 응답 텍스트가 비어있습니다.");
-        }
+            if (root.has("error") && !root.get("error").isNull()) {
+                throw new IllegalStateException("OpenAI error: " + root.get("error").toString());
+            }
 
-        // 모델이 JSON만 출력해야 하므로 JSON parse
-        return objectMapper.readTree(outputText.trim());
+            String outputText = root.path("output_text").asText(null);
+            if (outputText != null && !outputText.isBlank()) {
+                log.info("[LLM] OpenAI response ok. model={}, outputLen={}", model, outputText.length());
+                return outputText;
+            }
+
+            String merged = extractFromOutput(root);
+            if (merged != null && !merged.isBlank()) {
+                log.info("[LLM] OpenAI response ok(merged). model={}, outputLen={}", model, merged.length());
+                return merged;
+            }
+
+            // 그래도 없으면 전체 JSON 반환 (디버깅)
+            log.warn("[LLM] OpenAI response has no output_text/content. model={}, bodyPreview={}",
+                    model, shorten(resBody, 300));
+            return root.toString();
+
+        } catch (Exception e) {
+            log.error("[LLM] parse OpenAI response failed. model={}, bodyPreview={}",
+                    model, shorten(resBody, 300));
+            throw new IllegalStateException("parse OpenAI response failed: " + e.getMessage(), e);
+        }
     }
 
-    private String safe(String v) {
-        return v == null ? "" : v;
+    // ─────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────
+
+    private ObjectNode message(String role, String text) {
+        ObjectNode msg = objectMapper.createObjectNode();
+        msg.put("role", role);
+
+        ArrayNode content = msg.putArray("content");
+        ObjectNode c = content.addObject();
+        c.put("type", "input_text");
+        c.put("text", text == null ? "" : text);
+
+        return msg;
+    }
+
+    private String extractFromOutput(JsonNode root) {
+        JsonNode output = root.path("output");
+        if (!output.isArray()) return null;
+
+        StringBuilder sb = new StringBuilder();
+
+        for (JsonNode item : output) {
+            JsonNode content = item.path("content");
+            if (!content.isArray()) continue;
+
+            for (JsonNode c : content) {
+                String t = c.path("text").asText("");
+                if (t != null && !t.isBlank()) sb.append(t);
+            }
+        }
+
+        String merged = sb.toString().trim();
+        return merged.isBlank() ? null : merged;
+    }
+
+    private String normalizeModelText(String text) {
+        if (text == null) return "";
+
+        String t = text.trim();
+
+        if (t.startsWith("```")) {
+            int firstNewline = t.indexOf('\n');
+            int lastFence = t.lastIndexOf("```");
+            if (firstNewline > 0 && lastFence > firstNewline) {
+                t = t.substring(firstNewline + 1, lastFence).trim();
+            }
+        }
+
+        t = t.replace("\uFEFF", "").trim();
+        return t;
+    }
+
+    private void ensureConfig() {
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException("OpenAI apiKey is blank. (openai.api-key or ai.api-key not set)");
+        }
+        if (apiUrl == null || apiUrl.isBlank()) {
+            throw new IllegalStateException("OpenAI apiUrl is blank. (openai.api-url or ai.api-url not set)");
+        }
+        if (model == null || model.isBlank()) {
+            throw new IllegalStateException("OpenAI model is blank. (openai.model or ai.model.name not set)");
+        }
+    }
+
+    private String shorten(String s, int max) {
+        if (s == null) return "";
+        String t = s.trim();
+        if (t.length() <= max) return t;
+        return t.substring(0, max) + "...";
     }
 }

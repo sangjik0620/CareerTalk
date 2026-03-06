@@ -10,15 +10,20 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.NoSuchElementException;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class InterviewEvaluationService {
@@ -28,6 +33,9 @@ public class InterviewEvaluationService {
     private final InterviewEvaluationRepository evaluationRepository;
     private final InterviewOpenAiService interviewOpenAiService; // ✅ 인터뷰 전용 1회 호출 서비스
     private final ObjectMapper objectMapper;
+
+    @Value("classpath:prompts/interview_evaluation.txt")
+    private Resource interviewEvalSystemPrompt;
 
     /**
      * ✅ 분석 파이프라인 (유일한 생성 지점)
@@ -43,19 +51,25 @@ public class InterviewEvaluationService {
 
         List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
 
-        // 1) 서버 계산/구조 생성 (텍스트 생성 금지)
+        // 1) 서버 기본 구조 생성
         ObjectNode evaluation = buildEvaluationSkeleton(session, turns);
 
-        // 2) LLM 1회 호출 → 프론트 키 이름으로 patch 생성
+        // 2) LLM 결과 merge
         applyLlmInsights(evaluation, session, turns);
 
-        // 3) overallScore 등 저장용 요약 값 계산 (LLM이 overallScore를 주면 그걸 우선 사용)
-        int overall = clamp0_100(evaluation.path("summary").path("overallScore").asInt(0));
+        // 3) 총점 = 질문별 점수 평균
+        ObjectNode summary = (ObjectNode) evaluation.with("summary");
+        ObjectNode competency = (ObjectNode) evaluation.with("competency");
+        JsonNode questionResponses = evaluation.path("interviewAnalysis").path("questionResponses");
 
+        int overall = computeOverallFromQuestionResponses(questionResponses);
+        summary.put("overallScore", overall);
+
+        // 5) 저장
         String jsonStr = safeWrite(evaluation);
-        String strengths = joinArray(evaluation.path("summary").path("strengths"));
-        String weaknesses = joinArray(evaluation.path("summary").path("weaknesses"));
-        String nextActions = joinNextActions(evaluation.path("summary").path("nextActions"));
+        String strengths = joinArray(summary.path("strengths"));
+        String weaknesses = joinArray(summary.path("weaknesses"));
+        String nextActions = joinNextActions(summary.path("nextActions"));
 
         evaluationRepository.upsert(sessionId, overall, strengths, weaknesses, nextActions, jsonStr);
     }
@@ -121,7 +135,7 @@ public class InterviewEvaluationService {
         ArrayNode qArr = interview.putArray("questionResponses");
 
         int answered = 0;
-        int total = Math.max(turns.size(), 1);
+        int total = turns.size();
         int totalWords = 0;
         int totalRespSec = 0;
         int respSecCount = 0;
@@ -178,7 +192,8 @@ public class InterviewEvaluationService {
 
         // competency
         ObjectNode competency = root.putObject("competency");
-        // ✅ improvements도 서버에서 actionItems 생성 금지: LLM이 채움
+        competency.set("technical", emptyCompetencyBlock());
+        competency.set("soft", emptyCompetencyBlock());
         competency.set("improvements", objectMapper.createArrayNode());
 
         // comparison (프론트가 쓰는 탭이 있으면 구조만 만들어 둠)
@@ -198,7 +213,12 @@ public class InterviewEvaluationService {
     // ─────────────────────────────────────────────────────────────
 
     private void applyLlmInsights(ObjectNode evaluation, InterviewSession session, List<InterviewTurn> turns) {
-        // LLM 입력 payload (토큰 절약: 필요한 것만)
+        ObjectNode meta = evaluation.with("meta");
+        meta.put("llmProvider", "openai");
+        meta.put("llmModel", safe(modelNameOrUnknown()));
+        meta.put("llmStatus", "PENDING");
+
+        // 1) LLM 입력 payload
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("sessionId", session.getSessionId());
         payload.put("position", safe(session.getTitle()));
@@ -208,75 +228,107 @@ public class InterviewEvaluationService {
         for (InterviewTurn t : turns) {
             ObjectNode one = tArr.addObject();
             one.put("turnNo", safeInt(t.getTurnNo(), 0));
-            // 질문은 굳이 안 넣어도 됨(너가 지웠다 했으니). 필요 시만 살려.
-            // one.put("question", safe(t.getAiQuestion()));
+            one.put("question", safe(t.getAiQuestion()));
             one.put("answer", safe(firstNonBlank(t.getUserAnswerText(), t.getSttText(), "")).trim());
             one.put("durationSec", safeInt(t.getAnswerAudioDurationSec(), 0));
         }
 
-        // ✅ system prompt: "JSON만" + "키 이름 고정"
-        String system = """
-                당신은 모의 면접 결과를 정리하는 평가 엔진이다.
-                출력은 반드시 JSON '단독'으로만 반환하라. (설명문/마크다운/코드블록 금지)
-                한국어로 작성하라.
-
-                반드시 아래 스키마의 키 이름을 그대로 사용하라. 누락된 키는 빈 배열/빈 문자열로 채워라.
-
-                {
-                  "summary": {
-                    "topKeywords": ["string","string","string"],
-                    "strengths": ["string", ...],
-                    "weaknesses": ["string", ...],
-                    "nextActions": [{"title":"string","dueDays":number}, ...]
-                  },
-                  "competency": {
-                    "improvements": [{
-                      "area":"string",
-                      "priority":"high|medium|low",
-                      "currentLevel": number,
-                      "targetLevel": number,
-                      "actionItems": ["string", ...]
-                    }, ...]
-                  },
-                  "interviewAnalysis": {
-                    "voiceCoaching": ["string", ...]
-                  }
-                }
-
-                제약:
-                - nextActions/improvements.actionItems/topKeywords/voiceCoaching 는 서버 템플릿이 아니라 모델이 스스로 생성한다.
-                - dueDays는 0 이상의 정수.
-                - currentLevel/targetLevel은 0~100.
-                """;
-
+        String system = readResource(interviewEvalSystemPrompt);
         String user = "면접 원자료:\n" + safeWrite(payload);
 
-        JsonNode out;
-        try {
-            out = interviewOpenAiService.callJsonOnly(system, user);
-        } catch (Exception e) {
-            // ✅ 실패 시 서버 하드코딩으로 대체하지 않는다 (빈 값 유지)
-            return;
+        JsonNode out = interviewOpenAiService.callJsonOnly(system, user);
+
+        if (out == null || out.isNull()) {
+            meta.put("llmStatus", "FAILED");
+            throw new IllegalStateException("LLM output is null");
         }
 
-        // summary merge
+        log.info("[LLM RAW OUT] summaryExists={}, competencyExists={}, interviewExists={}, qResponsesSize={}",
+                out.path("summary").isObject(),
+                out.path("competency").isObject(),
+                out.path("interviewAnalysis").isObject(),
+                out.path("interviewAnalysis").path("questionResponses").size());
+
+        if (out.has("error")) {
+            meta.put("llmStatus", "FAILED");
+            String raw = out.path("raw").asText("");
+            throw new IllegalStateException("LLM returned invalid JSON. raw=" + shorten(raw, 500));
+        }
+
+        // 2) summary merge
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
         JsonNode outSummary = out.path("summary");
-        summary.set("topKeywords", arrayOrEmpty(outSummary.path("topKeywords")));
+        summary.set("topKeywords", normalizeTopKeywords(outSummary.path("topKeywords")));
         summary.set("strengths", arrayOrEmpty(outSummary.path("strengths")));
         summary.set("weaknesses", arrayOrEmpty(outSummary.path("weaknesses")));
         summary.set("nextActions", normalizeNextActions(outSummary.path("nextActions")));
 
-        // competency.improvements merge
+        // 3) competency merge
         ObjectNode competency = (ObjectNode) evaluation.with("competency");
         JsonNode outComp = out.path("competency");
+
+        JsonNode technical = outComp.path("technical");
+        if (technical.isObject()) {
+            competency.set("technical", (ObjectNode) technical);
+        }
+
+        JsonNode soft = outComp.path("soft");
+        if (soft.isObject()) {
+            competency.set("soft", (ObjectNode) soft);
+        }
+
         competency.set("improvements", normalizeImprovements(outComp.path("improvements")));
 
-        // interviewAnalysis.voiceCoaching merge
+        // 4) interviewAnalysis merge
         ObjectNode interview = (ObjectNode) evaluation.with("interviewAnalysis");
-        interview.set("voiceCoaching", arrayOrEmpty(out.path("interviewAnalysis").path("voiceCoaching")));
+        JsonNode outInterview = out.path("interviewAnalysis");
 
-        // (선택) overallScore를 LLM이 계산해주길 원하면 system 스키마에 overallScore 추가하고 여기서 merge하면 됨.
+        interview.set("voiceCoaching", arrayOrEmpty(outInterview.path("voiceCoaching")));
+
+        mergeQuestionResponses(
+                (ArrayNode) interview.withArray("questionResponses"),
+                out.path("interviewAnalysis").path("questionResponses")
+        );
+
+        meta.put("llmStatus", "OK");
+        meta.put("llmMergedAt", java.time.LocalDateTime.now().toString());
+    }
+
+    /**
+     * topKeywords는 "딱 3개"를 원하니 normalize 해줌.
+     * - 부족하면 있는 것만 (빈 문자열은 제거)
+     * - 초과하면 앞 3개만
+     * - 서버가 기본 키워드 주입하는 폴백은 금지 (빈 배열 가능)
+     */
+    private ArrayNode normalizeTopKeywords(JsonNode node) {
+        ArrayNode out = objectMapper.createArrayNode();
+        if (node == null || !node.isArray()) return out;
+
+        for (JsonNode it : node) {
+            String s = it.asText("").trim();
+            if (s.isBlank()) continue;
+            out.add(s);
+            if (out.size() >= 3) break;
+        }
+        return out;
+    }
+
+    /**
+     * 모델명 기록용 (원하면 삭제)
+     * InterviewOpenAiService에 model getter가 없으면 그냥 "unknown" 반환
+     */
+    private String modelNameOrUnknown() {
+        return "unknown";
+    }
+
+    /**
+     * 에러메시지 너무 길면 잘라서 예외 메시지에 넣기
+     */
+    private String shorten(String s, int max) {
+        if (s == null) return "";
+        String t = s.trim();
+        if (t.length() <= max) return t;
+        return t.substring(0, max) + "...";
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -411,4 +463,122 @@ public class InterviewEvaluationService {
         if (t.isEmpty()) return 0;
         return t.split("\\s+").length;
     }
+
+    private String readResource(Resource r) {
+        try {
+            return new String(r.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to read prompt resource", e);
+        }
+    }
+
+    private int computeOverallFromQuestionResponses(JsonNode questionResponses) {
+        if (questionResponses == null || !questionResponses.isArray()) return 0;
+
+        int sum = 0;
+        int count = 0;
+
+        for (JsonNode item : questionResponses) {
+            int score = clamp0_100(item.path("score").asInt(0));
+            if (score > 0) {
+                sum += score;
+                count++;
+            }
+        }
+
+        if (count == 0) return 0;
+        return clamp0_100((int) Math.round(sum * 1.0 / count));
+    }
+
+    private void mergeQuestionResponses(ArrayNode baseArr, JsonNode outArr) {
+        if (baseArr == null || !baseArr.isArray()) return;
+        if (outArr == null || !outArr.isArray()) {
+            log.warn("[LLM MERGE] outArr is empty or not array");
+            return;
+        }
+
+        int mergedCount = 0;
+
+        java.util.Map<Integer, JsonNode> byTurnNo = new java.util.HashMap<>();
+        for (JsonNode node : outArr) {
+            int turnNo = node.path("turnNo").asInt(0);
+            if (turnNo > 0) {
+                byTurnNo.put(turnNo, node);
+            }
+        }
+
+        for (JsonNode node : baseArr) {
+            if (!(node instanceof ObjectNode base)) continue;
+
+            int turnNo = base.path("turnNo").asInt(0);
+            JsonNode llmNode = byTurnNo.get(turnNo);
+            if (llmNode == null || !llmNode.isObject()) continue;
+
+            int beforeScore = base.path("score").asInt(0);
+
+            int score = clamp0_100(llmNode.path("score").asInt(0));
+            if (score > 0) {
+                base.put("score", score);
+            }
+
+            String oneLine = llmNode.path("oneLineFeedback").asText("").trim();
+            if (!oneLine.isBlank()) {
+                base.put("oneLineFeedback", oneLine);
+            }
+
+            String full = llmNode.path("fullFeedback").asText("").trim();
+            if (!full.isBlank()) {
+                base.put("fullFeedback", full);
+            }
+
+            if (beforeScore != base.path("score").asInt(0) || !oneLine.isBlank() || !full.isBlank()) {
+                mergedCount++;
+            }
+        }
+
+        log.info("[LLM MERGE] merged questionResponses={}/{}", mergedCount, baseArr.size());
+    }
+
+    private ObjectNode emptyCompetencyBlock() {
+        ObjectNode block = objectMapper.createObjectNode();
+        block.put("current", 0);
+        block.put("target", 0);
+        block.set("details", objectMapper.createObjectNode());
+        return block;
+    }
+
+    private ObjectNode buildTechnicalCompetency(int overall) {
+        int current = clamp0_100(overall);
+        int target = clamp0_100(Math.max(current + 10, 80));
+
+        ObjectNode details = objectMapper.createObjectNode();
+        details.put("frontEnd", clamp0_100(current - 15));
+        details.put("backEnd", clamp0_100(current + 5));
+        details.put("database", clamp0_100(current));
+        details.put("deployment", clamp0_100(current - 3));
+
+        ObjectNode block = objectMapper.createObjectNode();
+        block.put("current", current);
+        block.put("target", target);
+        block.set("details", details);
+        return block;
+    }
+
+    private ObjectNode buildSoftCompetency(int overall) {
+        int current = clamp0_100(Math.max(overall - 3, 0));
+        int target = clamp0_100(Math.max(current + 10, 80));
+
+        ObjectNode details = objectMapper.createObjectNode();
+        details.put("communication", clamp0_100(current + 2));
+        details.put("teamwork", clamp0_100(current - 2));
+        details.put("leadership", clamp0_100(current - 6));
+        details.put("presentation", clamp0_100(current));
+
+        ObjectNode block = objectMapper.createObjectNode();
+        block.put("current", current);
+        block.put("target", target);
+        block.set("details", details);
+        return block;
+    }
+
 }
