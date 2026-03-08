@@ -20,23 +20,22 @@ public class Member {
     @Column(name = "user_num")
     private Long userNum;
 
-    @Column(name="login_id")
+    @Column(name="user_id", unique = true)
     private String loginId;
 
     @Column(name = "password_hash", nullable = false)
     private String password;
 
-    // 1. 이름(name) 필드 추가
     @Column(nullable = false, length = 50)
     private String name;
 
     @Column(unique = true, length = 50, nullable = false)
     private String nickname;
 
-    @Column(unique = true, length = 255, nullable = false)
+    @Column(unique = false, length = 255, nullable = false)
     private String email;
 
-    @Column(length = 30) // DB 색인(Index) 사진에 유니크 설정이 있으므로 추가
+    @Column(length = 30)
     private String phone;
 
     @Column(name = "birth_date")
@@ -45,7 +44,6 @@ public class Member {
     @Column(name = "target_job", length = 100)
     private String targetJob;
 
-    // 2. 빌더 패턴 사용 시 기본값 유지를 위해 @Builder.Default 추가
     @Builder.Default
     @Column(length = 20)
     private String status = "ACTIVE";
@@ -57,4 +55,10 @@ public class Member {
     @UpdateTimestamp
     @Column(name = "updated_at", columnDefinition = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     private LocalDateTime updatedAt;
+
+    public void updateInfo(String name, String nickname, String email) {
+        this.name = name;
+        this.nickname = nickname;
+        this.email = email;
+    }
 }
