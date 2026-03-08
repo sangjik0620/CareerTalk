@@ -24,7 +24,8 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
 
     private final GooglePeopleService googlePeopleService;
     private final MemberService memberService;
-    private String loginId;
+
+    // 🚨 절대 금지: private String loginId; (전역 변수 삭제 완료)
 
     @Override
     public OAuth2User loadUser(OAuth2UserRequest userRequest) throws OAuth2AuthenticationException {
@@ -49,12 +50,12 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         if (provider.equals("google")) {
             userInfo = new GoogleUserInfo(attributes);
         } else if (provider.equals("naver")) {
-            userInfo = new NaverUserInfo(oAuth2User.getAttributes());
+            userInfo = new NaverUserInfo(attributes); // 원본 oAuth2User.getAttributes() 대신 수정 가능한 attributes 사용 권장
         } else if (provider.equals("kakao")) {
-            userInfo = new KakaoUserInfo(oAuth2User.getAttributes());
+            userInfo = new KakaoUserInfo(attributes);
         }
 
-        // 3. SocialSignupRequestDTO와 DB의 loginId를 위한 공통 값 설정
+        // 3. 지역 변수(Local Variable)로 loginId 안전하게 생성
         String loginId = userInfo.getProvider() + "_" + userInfo.getProviderId();
         attributes.put("email", userInfo.getEmail());
         attributes.put("name", userInfo.getName());
@@ -66,12 +67,9 @@ public class CustomOAuth2UserService extends DefaultOAuth2UserService {
         Member member = memberService.findByLoginId(loginId);
 
         if (member == null) {
-            // DB에 해당 loginId가 없으면 신규 유저
             attributes.put("isNewUser", true);
         } else {
-            // DB에 있으면 기존 유저 (이메일이 같아도 loginId가 다르면 여기 안 들어옴)
             attributes.put("isNewUser", false);
-            // 기존 유저의 경우 DB에 저장된 실제 정보를 attributes에 덮어씌울 수도 있습니다.
             attributes.put("nickname", member.getNickname());
         }
 
