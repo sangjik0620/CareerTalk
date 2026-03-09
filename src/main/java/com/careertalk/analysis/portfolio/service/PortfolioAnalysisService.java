@@ -65,33 +65,30 @@ public class PortfolioAnalysisService {
 
 
     @Transactional(noRollbackFor = RuntimeException.class)
-    public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String jobCategory, String detailedPosition) {
+    public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String jobCategory, String detailedPosition, Long userNum) {
 
-        // 임시 사용자 ID
-        final Long currentUserId = 1L;
-
-        // 룰 기반 검증
+        // 1. PDF 확장자 체크
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || !originalFilename.toLowerCase().endsWith(".pdf")) {
             throw new RuntimeException("현재는 PDF 형식의 포트폴리오만 분석이 가능합니다.");
         }
 
-        // S3에 파일 업로드
+        // 2. S3 파일 업로드 (전달받은 userNum 사용)
         String s3Key;
         try {
-            s3Key = s3Service.uploadFile(file, currentUserId);
+            s3Key = s3Service.uploadFile(file, userNum);
         } catch (IOException e) {
             throw new RuntimeException("S3 파일 업로드에 실패했습니다.", e);
         }
 
-        // FileEntity DB 저장
+        // 3. FileEntity DB 저장
         Long realFileId;
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(s3Key.getBytes(StandardCharsets.UTF_8));
 
             FileEntity fileEntity = new FileEntity();
-            fileEntity.setUserNum(currentUserId);
+            fileEntity.setUserNum(userNum); // 수정됨
             fileEntity.setFileType("PORTFOLIO");
             fileEntity.setOriginalName(originalFilename);
             fileEntity.setMimeType(file.getContentType());
@@ -108,11 +105,11 @@ public class PortfolioAnalysisService {
             throw new RuntimeException("파일 정보 저장 중 오류가 발생했습니다.");
         }
 
-        // 텍스트 추출 및 PortfolioEntity 선저장
+        // 4. 텍스트 추출 및 PortfolioEntity 저장
         String extractedText = fileParserUtil.extractText(file);
 
         PortfolioEntity portfolio = PortfolioEntity.builder()
-                .userNum(currentUserId)
+                .userNum(userNum)
                 .fileId(realFileId)
                 .title(originalFilename)
                 .extractedText(extractedText)
@@ -120,35 +117,27 @@ public class PortfolioAnalysisService {
                 .build();
         portfolioRepository.save(portfolio);
 
-        // 룰 기반 검증
+        // 5. 룰 기반 검증
         String ruleBasedFailReason = validateExtractedText(extractedText);
         if (ruleBasedFailReason != null) {
-            log.warn("룰 기반 검증 실패: {} - AI 호출을 중단합니다.", ruleBasedFailReason);
-            return createRuleBasedFailResponse(ruleBasedFailReason, currentUserId, portfolio.getPortfolioId(), jobCategory);
+            return createRuleBasedFailResponse(ruleBasedFailReason, userNum, portfolio.getPortfolioId(), jobCategory);
         }
 
-        // 이미지 추출 (PDF 전용)
+        // 6. 이미지 추출 및 AI 분석
         List<String> base64Images = fileParserUtil.extractImagesAsBase64(file);
-
-        //  프롬프트 조합
         String systemPrompt = getSystemPrompt();
         String targetJobData = (detailedPosition != null && !detailedPosition.isBlank())
                 ? jobCategory + " (" + detailedPosition + ")"
                 : jobCategory;
         String userPrompt = "지원 직무: " + targetJobData + "\n\n포트폴리오 내용:\n" + extractedText;
 
-        //  AI 통신 및 결과 처리
         try {
-            log.info("AI 분석 시작... (타겟: {})", targetJobData);
             String aiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, base64Images);
-            log.info("AI 분석 완료!");
-
-            return processAndSaveAiResult(aiResultJson, currentUserId, portfolio.getPortfolioId(), jobCategory, "SUCCESS", null);
-
+            return processAndSaveAiResult(aiResultJson, userNum, portfolio.getPortfolioId(), jobCategory, "SUCCESS", null);
         } catch (Exception e) {
             log.error("AI 분석 중 에러 발생: {}", e.getMessage());
-            processAndSaveAiResult(null, currentUserId, portfolio.getPortfolioId(), jobCategory, "FAILED", e.getMessage());
-            throw new RuntimeException("AI 분석 서비스 장애가 발생했습니다. 잠시 후 다시 시도해 주세요.");
+            processAndSaveAiResult(null, userNum, portfolio.getPortfolioId(), jobCategory, "FAILED", e.getMessage());
+            throw new RuntimeException("AI 분석 서비스 장애가 발생했습니다.");
         }
     }
 
@@ -248,9 +237,14 @@ public class PortfolioAnalysisService {
 
 
     @Transactional(readOnly = true)
-    public PortfolioAnalysisResponse getAnalysisResult(Long analysisId) {
+    public PortfolioAnalysisResponse getAnalysisResult(Long analysisId, Long userNum) {
         AnalysisEntity analysis = analysisRepository.findById(analysisId)
                 .orElseThrow(() -> new RuntimeException("결과를 찾을 수 없습니다."));
+
+        // 본인의 결과만 조회할 수 있도록 검증
+        if (!analysis.getUserNum().equals(userNum)) {
+            throw new RuntimeException("해당 결과에 대한 접근 권한이 없습니다.");
+        }
 
         if ("FAILED".equals(analysis.getStatus())) {
             throw new RuntimeException("분석 실패 기록입니다: " + analysis.getErrorMessage());
