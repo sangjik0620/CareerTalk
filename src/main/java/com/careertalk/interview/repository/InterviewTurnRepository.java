@@ -7,4 +7,5 @@ import java.util.List;
 
 public interface InterviewTurnRepository extends JpaRepository<InterviewTurn, Long> {
     List<InterviewTurn> findBySessionIdOrderByTurnNoAsc(Long sessionId);
+
 }

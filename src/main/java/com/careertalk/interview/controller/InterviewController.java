@@ -123,7 +123,6 @@ public class InterviewController {
 
         if (updated == 1) {
             interviewAnalysisWorker.runAsync(sessionId);
-
             return ResponseEntity.accepted().body(Map.of(
                     "sessionId", sessionId,
                     "status", "PROCESSING"

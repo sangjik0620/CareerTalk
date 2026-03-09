@@ -11,21 +11,31 @@ import org.springframework.stereotype.Service;
 public class InterviewAnalysisWorker {
 
     private final InterviewEvaluationService interviewEvaluationService;
+    private final TurnSttService turnSttService;
 
-    // ✅ AsyncConfig에서 만든 executor 이름과 동일해야 함
     @Async("analysisExecutor")
     public void runAsync(Long sessionId) {
-//        log.info("===== ASYNC ANALYSIS START sessionId={} thread={} =====",
-//                sessionId,
-//                Thread.currentThread().getName());
-        try {
-            // 내부 분석 실행 (기존 runAnalysis를 runAnalysisInternal로 바꿔서 호출할 예정)
-            interviewEvaluationService.runAnalysisInternal(sessionId);
+        log.info("[ANALYSIS] worker start sessionId={} thread={}",
+                sessionId,
+                Thread.currentThread().getName());
 
-            // 성공 상태는 내부에서 처리하거나 여기서 처리(둘 중 하나로 통일)
+        try {
+            // 1) 턴별 STT + 음성분석 + 턴 점수
+            log.info("[ANALYSIS] turn pipeline start sessionId={}", sessionId);
+            turnSttService.processSessionTurns(sessionId);
+            log.info("[ANALYSIS] turn pipeline done sessionId={}", sessionId);
+
+            // 2) 세션 종합 LLM 분석
+            log.info("[ANALYSIS] LLM analysis start sessionId={}", sessionId);
+            interviewEvaluationService.runAnalysisInternal(sessionId);
+            log.info("[ANALYSIS] LLM analysis done sessionId={}", sessionId);
+
+            // 3) 완료 처리
             interviewEvaluationService.markDone(sessionId);
+            log.info("[ANALYSIS] worker done sessionId={}", sessionId);
+
         } catch (Exception e) {
-            log.error("Interview analysis failed. sessionId={}", sessionId, e);
+            log.error("[ANALYSIS] worker failed sessionId={}", sessionId, e);
             interviewEvaluationService.markFailed(sessionId, e.getMessage());
         }
     }
