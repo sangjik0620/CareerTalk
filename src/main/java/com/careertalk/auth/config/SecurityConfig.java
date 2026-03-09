@@ -19,12 +19,19 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http, CustomOAuth2UserService customOAuth2UserService, CustomSuccessHandler customSuccessHandler) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
-                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+                .cors(cors -> cors.configure(http))
+                .sessionManagement(session -> session
+                        .sessionCreationPolicy(org.springframework.security.config.http.SessionCreationPolicy.STATELESS)
+                )
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/member/login", "/api/member/signup", "/api/member/me").permitAll() // 명시적으로 허용
+                        .anyRequest().permitAll()
+                )
                 .oauth2Login(oauth -> oauth
                         .userInfoEndpoint(userInfo -> userInfo
                                 .userService(customOAuth2UserService)
                         )
-                        .successHandler(customSuccessHandler) // ⭐ 성공 시 핸들러 실행!
+                        .successHandler(customSuccessHandler)
                 );
 
         return http.build();
