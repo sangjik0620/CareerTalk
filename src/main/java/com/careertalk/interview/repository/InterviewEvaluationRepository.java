@@ -5,6 +5,8 @@ import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Optional;
+
 public interface InterviewEvaluationRepository extends JpaRepository<InterviewEvaluation, Long> {
 
     @Query(value = """
@@ -151,6 +153,6 @@ AND (analysis_status IS NULL OR analysis_status IN ('PENDING','FAILED'))
 """, nativeQuery = true)
     int markProcessingIfPossible(@Param("sessionId") Long sessionId);
 
-
+    Optional<InterviewEvaluation> findBySessionId(Long sessionId);
 
 }

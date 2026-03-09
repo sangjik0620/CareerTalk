@@ -112,7 +112,12 @@ public class InterviewEvaluationService {
     @Transactional(readOnly = true)
     public String getAnalysisStatus(Long sessionId) {
         String status = evaluationRepository.findAnalysisStatusBySessionId(sessionId);
-        return (status == null || status.isBlank()) ? "PENDING" : status;
+        if (status == null || status.isBlank()) {
+            System.out.println("[STATUS] no evaluation row for sessionId=" + sessionId);
+            return "PENDING";
+        }
+        System.out.println("[STATUS] sessionId=" + sessionId + ", status=" + status);
+        return status;
     }
 
     // ─────────────────────────────────────────────────────────────
