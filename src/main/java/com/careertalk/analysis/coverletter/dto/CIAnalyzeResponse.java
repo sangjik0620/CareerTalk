@@ -7,18 +7,17 @@ import java.util.List;
 
 @Getter
 @Builder
-public class CiAnalysisResponse {
-    private long analysisId;
+public class CIAnalyzeResponse {
 
-    private String jobRole;
-    private String jobDetail;
+    private Long analysisId;
+    private Long essayId;
 
     private String title;
     private String content;
 
-    private int ruleScore;
-    private int llmScore;
-    private int totalScore;
+    private Integer ruleScore;
+    private Integer llmScore;
+    private Integer totalScore;
 
     private String strengths;
     private String weaknesses;
@@ -27,4 +26,7 @@ public class CiAnalysisResponse {
     private List<QuestionItem> questions;
 
     private String updatedAt;
+
+    private String jobRole;
+    private String jobDetail;
 }
