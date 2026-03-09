@@ -1,16 +1,16 @@
 package com.careertalk.auth.controller;
 
-import com.careertalk.auth.dto.LoginRequestDTO;
-import com.careertalk.auth.dto.MemberResponseDTO; // 1. DTO 임포트 추가
-import com.careertalk.auth.dto.SignupRequestDTO;
-import com.careertalk.auth.dto.SocialSignupRequestDTO;
+import com.careertalk.auth.dto.*;
 import com.careertalk.auth.entity.Member;
+import com.careertalk.auth.jwt.JwtUtil;
+import com.careertalk.auth.repository.MemberRepository;
 import com.careertalk.auth.service.EmailService;
 import com.careertalk.auth.service.MemberService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,12 +23,10 @@ public class MemberController {
 
     private final MemberService memberService;
     private final EmailService emailService;
-
+    private final JwtUtil jwtUtil;
     private final Map<String, String> emailAuthMap = new ConcurrentHashMap<>();
 
-    /**
-     * 일반 회원가입 처리
-     */
+    /* 일반 회원가입 처리 */
     @PostMapping("/signup")
     public ResponseEntity<?> signup(@RequestBody SignupRequestDTO signupRequestDTO) {
         try {
@@ -39,20 +37,24 @@ public class MemberController {
         }
     }
 
-    /**
-     * 일반 로그인 처리
-     */
+    /* 일반 로그인 처리 */
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequestDTO loginRequestDTO) {
         try {
-            Member user = memberService.login(loginRequestDTO);
+            String token = memberService.login(loginRequestDTO);
+            Member member = memberService.findByLoginId(loginRequestDTO.getLoginId());
+            if (member == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body("유저 정보를 찾을 수 없습니다.");
+            }
+            MemberResponseDTO userDto = MemberResponseDTO.from(member);
+            return ResponseEntity.ok(Map.of(
+                    "accessToken", token,
+                    "user", userDto
+            ));
 
-            // 2. HashMap 대신 MemberResponseDTO의 정적 팩토리 메서드 사용
-            return ResponseEntity.ok(MemberResponseDTO.from(user));
-
-        } catch (RuntimeException e) {
-            // 401 Unauthorized 상태 코드를 명시적으로 반환
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("로그인 에러: " + e.getMessage());
         }
     }
 
@@ -61,29 +63,36 @@ public class MemberController {
         try {
             Member savedMember = memberService.socialSignupComplete(requestDTO);
 
-            // 가입 완료 후 로그인된 상태로 정보를 반환 (기존 ResponseDTO 활용)
-            return ResponseEntity.ok(MemberResponseDTO.from(savedMember));
+            String token = jwtUtil.createToken(savedMember.getLoginId(), "ROLE_USER");
+
+            return ResponseEntity.ok(Map.of(
+                    "accessToken", token,
+                    "user", MemberResponseDTO.from(savedMember)
+            ));
 
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
 
-    @DeleteMapping("/delete/{email}")
-    public ResponseEntity<?> deleteMember(@PathVariable String email) {
+    @DeleteMapping("/delete/me")
+    public ResponseEntity<?> deleteMember(@RequestHeader("Authorization") String token) {
         try {
-            memberService.deleteMember(email);
-            return ResponseEntity.ok("회원 탈퇴가 완료되었습니다.");
+            String jwtToken = token.substring(7);
+            String loginId = jwtUtil.getLoginId(jwtToken);
+
+            memberService.deleteMemberByLoginId(loginId);
+
+            return ResponseEntity.ok("탈퇴 완료");
         } catch (Exception e) {
-            return ResponseEntity.badRequest().body(e.getMessage());
+            return ResponseEntity.badRequest().body("탈퇴 실패: " + e.getMessage());
         }
     }
 
-    // MemberController 클래스 안에 추가
     @GetMapping("/check-id")
     public ResponseEntity<Boolean> checkId(@RequestParam("loginId") String loginId) {
         boolean isDuplicate = memberService.checkLoginIdDuplicate(loginId);
-        return ResponseEntity.ok(isDuplicate); // 중복이면 true, 아니면 false 반환
+        return ResponseEntity.ok(isDuplicate);
     }
 
     @GetMapping("/check-nickname")
@@ -92,17 +101,17 @@ public class MemberController {
         return ResponseEntity.ok(isDuplicate);
     }
 
-    // MemberController 내부에 추가
-    private String savedCode; // 임시 저장 (실무에선 Redis나 세션 활용 권장)
-
     @PostMapping("/send-email")
     public ResponseEntity<String> sendEmail(@RequestParam("email") String email) {
         try {
-            String code = emailService.createCode();
-            // ⭐ 개선: 전체 공유 변수가 아닌, 해당 이메일에 매핑된 코드를 저장
-            emailAuthMap.put(email, code);
+            if (memberService.isDuplicateNormalEmail(email)) {
+                return ResponseEntity.status(HttpStatus.CONFLICT).body("DUPLICATE_NORMAL_EMAIL");
+            }
 
+            String code = emailService.createCode();
+            emailAuthMap.put(email, code);
             emailService.sendEmail(email, code);
+
             return ResponseEntity.ok("인증 메일이 발송되었습니다.");
         } catch (Exception e) {
             e.printStackTrace();
@@ -111,16 +120,54 @@ public class MemberController {
     }
 
     @PostMapping("/verify-email")
-    public ResponseEntity<Boolean> verifyEmail(@RequestParam("email") String email, @RequestParam("code") String code) {
-        // ⭐ 개선: 요청받은 이메일로 저장된 코드를 꺼내와서 비교
+    public ResponseEntity<Boolean> verifyEmail(
+            @RequestParam("email") String email,
+            @RequestParam("code") String code) {
+
         String originCode = emailAuthMap.get(email);
+
+        if (originCode == null) {
+            return ResponseEntity.ok(false);
+        }
+
         boolean isMatch = code.equals(originCode);
 
         if (isMatch) {
-            emailAuthMap.remove(email); // 인증 성공 시 코드 삭제 (보안상 권장)
+            emailAuthMap.remove(email);
         }
 
         return ResponseEntity.ok(isMatch);
+    }
+
+    @GetMapping("/me")
+    public ResponseEntity<?> getMyInfo(@RequestHeader(value = "Authorization", required = false) String token) {
+        if (token == null || !token.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("인증이 필요합니다.");
+        }
+
+        try {
+            String jwtToken = token.substring(7);
+            String loginId = jwtUtil.getLoginId(jwtToken);
+            Member member = memberService.findByLoginId(loginId);
+
+            if (member == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body("사용자 없음");
+            }
+
+            return ResponseEntity.ok(MemberResponseDTO.from(member));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("유효하지 않은 토큰");
+        }
+    }
+
+    @PostMapping("/update")
+    public ResponseEntity<?> updateInfo(@RequestBody UpdateRequestDTO dto) {
+        try {
+            memberService.updateMember(dto);
+            return ResponseEntity.ok("정보가 수정되었습니다.");
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body("수정 실패: " + e.getMessage());
+        }
     }
 
 }

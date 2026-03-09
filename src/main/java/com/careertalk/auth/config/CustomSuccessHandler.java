@@ -1,6 +1,7 @@
 package com.careertalk.auth.config;
 
 import com.careertalk.auth.entity.Member;
+import com.careertalk.auth.jwt.JwtUtil;
 import com.careertalk.auth.repository.MemberRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
@@ -20,6 +21,7 @@ import java.util.Optional;
 public class CustomSuccessHandler extends SimpleUrlAuthenticationSuccessHandler {
 
     private final MemberRepository memberRepository;
+    private final JwtUtil jwtUtil;
 
     @Override
     public void onAuthenticationSuccess(HttpServletRequest request, HttpServletResponse response,
@@ -29,16 +31,19 @@ public class CustomSuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
         String email = (String) oAuth2User.getAttributes().get("email");
         String loginId = (String) oAuth2User.getAttributes().get("loginId");
 
-        // 1. 해당 소셜 계정(loginId)으로 이미 가입된 회원인지 확인
         Optional<Member> memberByLoginId = memberRepository.findByLoginId(loginId);
 
         String targetUrl;
 
         if (memberByLoginId.isPresent()) {
-            // [기존 소셜 계정 유저] -> 메인 화면으로 이동
+            // [1] 이미 가입된 소셜 계정이 있는 경우 -> 로그인 성공 처리
             Member member = memberByLoginId.get();
+            String token = jwtUtil.createToken(member.getLoginId(), "ROLE_USER");
+
             targetUrl = UriComponentsBuilder.fromUriString("http://localhost:5173/")
                     .queryParam("loginSuccess", true)
+                    .queryParam("token", token)
+                    .queryParam("loginId", member.getLoginId())
                     .queryParam("email", member.getEmail())
                     .queryParam("nickname", member.getNickname())
                     .queryParam("name", member.getName())
@@ -46,28 +51,15 @@ public class CustomSuccessHandler extends SimpleUrlAuthenticationSuccessHandler 
                     .encode(StandardCharsets.UTF_8)
                     .toUriString();
         } else {
-            // [신규 소셜 시도] 이메일이 이미 다른 계정으로 등록되어 있는지 확인
-            Optional<Member> memberByEmail = memberRepository.findByEmail(email);
-
-            if (memberByEmail.isPresent()) {
-                // ⭐ 이메일 중복 발생! -> 로그인 페이지로 리다이렉트하며 에러 코드 전달
-                targetUrl = UriComponentsBuilder.fromUriString("http://localhost:5173/login")
-                        .queryParam("error", "duplicate_email")
-                        .build()
-                        .encode(StandardCharsets.UTF_8)
-                        .toUriString();
-            } else {
-                // [진짜 신규 유저] -> 회원가입 페이지로 이동
-                targetUrl = UriComponentsBuilder.fromUriString("http://localhost:5173/social-signup")
-                        .queryParam("email", email)
-                        .queryParam("loginId", loginId)
-                        .queryParam("name", (String) oAuth2User.getAttributes().get("name"))
-                        .queryParam("phone", (String) oAuth2User.getAttributes().get("phone"))
-                        .queryParam("birthDate", (String) oAuth2User.getAttributes().get("birthDate"))
-                        .build()
-                        .encode(StandardCharsets.UTF_8)
-                        .toUriString();
-            }
+            targetUrl = UriComponentsBuilder.fromUriString("http://localhost:5173/social-signup")
+                    .queryParam("email", email)
+                    .queryParam("loginId", loginId)
+                    .queryParam("name", (String) oAuth2User.getAttributes().get("name"))
+                    .queryParam("phone", (String) oAuth2User.getAttributes().get("phone"))
+                    .queryParam("birthDate", (String) oAuth2User.getAttributes().get("birthDate"))
+                    .build()
+                    .encode(StandardCharsets.UTF_8)
+                    .toUriString();
         }
 
         getRedirectStrategy().sendRedirect(request, response, targetUrl);
