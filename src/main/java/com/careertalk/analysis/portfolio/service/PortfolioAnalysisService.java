@@ -10,6 +10,8 @@ import com.careertalk.analysis.portfolio.repository.PortfolioRepository;
 import com.careertalk.analysis.portfolio.util.FileParserUtil;
 import com.careertalk.analysis.common.repository.AnalysisRepository;
 
+import com.careertalk.auth.entity.Member;
+import com.careertalk.auth.repository.MemberRepository;
 import com.careertalk.file.entity.FileEntity;
 import com.careertalk.file.repository.FileRepository;
 import com.careertalk.file.service.S3Service;
@@ -47,6 +49,7 @@ public class PortfolioAnalysisService {
 
     private final S3Service s3Service;
     private final FileRepository fileRepository;
+    private final MemberRepository memberRepository;
 
     @Value("${aws.s3.bucket}")
     private String s3BucketName;
@@ -65,7 +68,14 @@ public class PortfolioAnalysisService {
 
 
     @Transactional(noRollbackFor = RuntimeException.class)
-    public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String jobCategory, String detailedPosition, Long userNum) {
+    public PortfolioAnalysisResponse analyzeAndSave(MultipartFile file, String jobCategory, String detailedPosition, String loginId) {
+
+        // 💡 0. loginId를 이용해 실제 DB의 Member 객체를 가져옵니다.
+        Member member = memberRepository.findByLoginId(loginId)
+                .orElseThrow(() -> new RuntimeException("해당 아이디의 회원을 찾을 수 없습니다: " + loginId));
+
+        // 💡 Member 엔티티 내부의 PK 필드명에 맞춰 꺼내세요 (예: member.getUserNum() 또는 member.getId())
+        Long userNum = member.getUserNum();
 
         // 1. PDF 확장자 체크
         String originalFilename = file.getOriginalFilename();
@@ -73,7 +83,7 @@ public class PortfolioAnalysisService {
             throw new RuntimeException("현재는 PDF 형식의 포트폴리오만 분석이 가능합니다.");
         }
 
-        // 2. S3 파일 업로드 (전달받은 userNum 사용)
+        // 2. S3 파일 업로드 (가져온 userNum 사용)
         String s3Key;
         try {
             s3Key = s3Service.uploadFile(file, userNum);
@@ -88,7 +98,7 @@ public class PortfolioAnalysisService {
             byte[] hash = digest.digest(s3Key.getBytes(StandardCharsets.UTF_8));
 
             FileEntity fileEntity = new FileEntity();
-            fileEntity.setUserNum(userNum); // 수정됨
+            fileEntity.setUserNum(userNum); // 💡 1L 대신 userNum 적용
             fileEntity.setFileType("PORTFOLIO");
             fileEntity.setOriginalName(originalFilename);
             fileEntity.setMimeType(file.getContentType());
@@ -109,13 +119,15 @@ public class PortfolioAnalysisService {
         String extractedText = fileParserUtil.extractText(file);
 
         PortfolioEntity portfolio = PortfolioEntity.builder()
-                .userNum(userNum)
+                .userNum(userNum) // 💡 1L 대신 userNum 적용
                 .fileId(realFileId)
                 .title(originalFilename)
                 .extractedText(extractedText)
                 .status("ACTIVE")
                 .build();
         portfolioRepository.save(portfolio);
+
+
 
         // 5. 룰 기반 검증
         String ruleBasedFailReason = validateExtractedText(extractedText);
@@ -129,6 +141,8 @@ public class PortfolioAnalysisService {
         String targetJobData = (detailedPosition != null && !detailedPosition.isBlank())
                 ? jobCategory + " (" + detailedPosition + ")"
                 : jobCategory;
+        log.info("==== [AI 요청 직무 확인] : {} ====", targetJobData); // 👈 이 줄 추가
+        log.info("==== [추출된 텍스트 길이] : {} ====", extractedText.length()); // 👈 이것도 넣으면 도움됩니다.
         String userPrompt = "지원 직무: " + targetJobData + "\n\n포트폴리오 내용:\n" + extractedText;
 
         try {
@@ -140,6 +154,7 @@ public class PortfolioAnalysisService {
             throw new RuntimeException("AI 분석 서비스 장애가 발생했습니다.");
         }
     }
+
 
 
     private String validateExtractedText(String text) {
@@ -238,20 +253,30 @@ public class PortfolioAnalysisService {
 
     @Transactional(readOnly = true)
     public PortfolioAnalysisResponse getAnalysisResult(Long analysisId, Long userNum) {
+        // 1. 분석 결과 조회
         AnalysisEntity analysis = analysisRepository.findById(analysisId)
                 .orElseThrow(() -> new RuntimeException("결과를 찾을 수 없습니다."));
 
-        // 본인의 결과만 조회할 수 있도록 검증
+        // 2. 권한 검증
         if (!analysis.getUserNum().equals(userNum)) {
             throw new RuntimeException("해당 결과에 대한 접근 권한이 없습니다.");
         }
+
+        // 3. 💡 DB(users 테이블)에서 닉네임 가져오기
+        // MemberRepository가 주입되어 있어야 합니다.
+        Member member = (Member) memberRepository.findByUserNum(userNum)
+                .orElseThrow(() -> new RuntimeException("유저 정보를 찾을 수 없습니다."));
+        String nickname = member.getNickname();
 
         if ("FAILED".equals(analysis.getStatus())) {
             throw new RuntimeException("분석 실패 기록입니다: " + analysis.getErrorMessage());
         }
 
         try {
-            return convertToResponseDto(analysis);
+            // 4. DTO 변환 시 닉네임 함께 전달
+            PortfolioAnalysisResponse response = convertToResponseDto(analysis);
+            response.setNickname(nickname); // DTO에 setNickname 메서드가 있어야 함
+            return response;
         } catch (JsonProcessingException e) {
             throw new RuntimeException("데이터 변환 오류");
         }
