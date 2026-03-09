@@ -2,12 +2,15 @@ package com.careertalk.interview.controller;
 
 import com.careertalk.interview.dto.SessionTargetRequest;
 import com.careertalk.interview.dto.InterviewResultV2Response;
+import com.careertalk.interview.entity.AnalysisStatus;
+import com.careertalk.interview.entity.InterviewEvaluation;
 import com.careertalk.interview.repository.InterviewEvaluationRepository;
 import com.careertalk.interview.service.InterviewAnalysisWorker;
 import com.careertalk.interview.service.InterviewEvaluationService;
 import com.careertalk.interview.service.InterviewResultService;
 import com.careertalk.interview.service.InterviewService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -16,6 +19,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/interview")
 @RequiredArgsConstructor
@@ -59,7 +63,7 @@ public class InterviewController {
     public ResponseEntity<?> result(@PathVariable Long sessionId) {
 
         String status = evaluationService.getAnalysisStatus(sessionId);
-
+        log.info("status : {}", status);
         if (!"DONE".equalsIgnoreCase(status)) {
             return ResponseEntity.status(202).body(Map.of(
                     "message", "analysis not ready",
@@ -74,21 +78,37 @@ public class InterviewController {
 
     @PostMapping("/sessions/{sessionId}/analyze")
     public ResponseEntity<?> analyze(@PathVariable Long sessionId) {
+        System.out.println("[ANALYZE] request start sessionId=" + sessionId);
 
-        // 1) "PROCESSING 선점" 시도 (성공=1, 실패=0)
+        // 0) evaluation row 없으면 먼저 생성
+        evaluationRepository.findBySessionId(sessionId)
+                .orElseGet(() -> {
+                    InterviewEvaluation eval = new InterviewEvaluation();
+                    eval.setSessionId(sessionId);
+                    eval.setOverallScore(0); // DB default 있어도 명시해주면 안전
+                    eval.setAnalysisStatus(AnalysisStatus.PENDING);
+                    return evaluationRepository.save(eval);
+                });
+
+        // 1) PROCESSING 선점
         int updated = evaluationRepository.markProcessingIfPossible(sessionId);
+        System.out.println("[ANALYZE] markProcessingIfPossible updated=" + updated);
 
-        // 2) 선점 성공한 요청만 워커 실행 (LLM 호출 1회 보장)
+        // 2) 선점 성공 시에만 워커 실행
         if (updated == 1) {
+            System.out.println("[ANALYZE] worker start sessionId=" + sessionId);
             interviewAnalysisWorker.runAsync(sessionId);
+
             return ResponseEntity.accepted().body(Map.of(
                     "sessionId", sessionId,
                     "status", "PROCESSING"
             ));
         }
 
-        // 3) 이미 진행중/완료 → 워커 실행 없이 현재 상태만 반환
+        // 3) 이미 진행중/완료된 경우 현재 상태 반환
         String status = evaluationRepository.findAnalysisStatusBySessionId(sessionId);
+        System.out.println("[ANALYZE] existing status=" + status);
+
         return ResponseEntity.ok().body(Map.of(
                 "sessionId", sessionId,
                 "status", status == null ? "PENDING" : status
@@ -98,6 +118,7 @@ public class InterviewController {
     @GetMapping("/sessions/{sessionId}/analysis/status")
     public ResponseEntity<?> analysisStatus(@PathVariable Long sessionId) {
         String status = evaluationService.getAnalysisStatus(sessionId);
+        System.out.println("[STATUS API] sessionId=" + sessionId);
         return ResponseEntity.ok(Map.of(
                 "sessionId", sessionId,
                 "status", status
