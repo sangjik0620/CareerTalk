@@ -56,20 +56,20 @@ public class PythonAudioAnalysisClient {
                     .timeout(Duration.ofMinutes(3))
                     .block();
 
-            System.out.println("[PythonAudioAnalysisClient] response received: " +
-                    ((System.currentTimeMillis() - start) / 1000.0) + "s");
-
             long end = System.currentTimeMillis();
             System.out.println("[PythonAudioAnalysisClient] response received: " + ((end - start) / 1000.0) + "s");
 
             return new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
 
         } catch (WebClientResponseException e) {
+            System.out.println("[PythonAudioAnalysisClient] HTTP error: " + e.getStatusCode()
+                    + " body=" + e.getResponseBodyAsString());
             throw new IllegalStateException("Python audio analysis failed: "
                     + e.getStatusCode() + " body=" + e.getResponseBodyAsString(), e);
 
         } catch (Exception e) {
             Throwable root = Exceptions.unwrap(e);
+            System.out.println("[PythonAudioAnalysisClient] exception: " + root);
             if (root instanceof TimeoutException) {
                 throw new IllegalStateException("Python audio analysis timeout after 3 minutes: " + wavPath, e);
             }
