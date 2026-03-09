@@ -1,11 +1,10 @@
 package com.careertalk.analysis.coverletter.dto;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.Data;
 
-@Getter
-@Setter
+@Data
 public class CiRewriteRequest {
+    private Long analysisId;
     private String jobRole;
     private String jobDetail;
     private String title;
