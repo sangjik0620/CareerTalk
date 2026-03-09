@@ -60,6 +60,9 @@ public class InterviewResultService {
             InterviewResultV2Response.Scores scores =
                     extractScoresSummary(t.getAudioScoresJson());
 
+            InterviewResultV2Response.Feedback feedback =
+                    extractFeedbackSummary(t.getFeedbackJson());
+
             InterviewResultV2Response.Audio audio =
                     new InterviewResultV2Response.Audio(
                             t.getAnswerAudioFileId(),
@@ -82,7 +85,8 @@ public class InterviewResultService {
                             firstNonBlank(t.getUserAnswerText(), t.getSttText(), null),
                             audio,
                             metrics,
-                            scores
+                            scores,
+                            feedback
                     );
 
             details.add(dto);
@@ -110,6 +114,72 @@ public class InterviewResultService {
         }
     }
 
+    private InterviewResultV2Response.Feedback extractFeedbackSummary(String json) {
+        if (json == null || json.isBlank()) {
+            return emptyFeedback();
+        }
+
+        try {
+            JsonNode root = objectMapper.readTree(json);
+
+            Integer score = root.path("score").isNumber() ? root.path("score").asInt() : null;
+
+            String oneLineFeedback = blankToNull(root.path("oneLineFeedback").asText(null));
+            String fullFeedback = blankToNull(root.path("fullFeedback").asText(null));
+            Integer sentimentScore = root.path("sentimentScore").isNumber() ? root.path("sentimentScore").asInt() : null;
+
+            JsonNode kw = root.path("keywords");
+            InterviewResultV2Response.Keywords keywords = new InterviewResultV2Response.Keywords(
+                    toStringList(kw.path("technical")),
+                    toStringList(kw.path("soft")),
+                    toStringList(kw.path("company"))
+            );
+
+            JsonNode voice = root.path("voice");
+            InterviewResultV2Response.VoiceFeedback voiceFeedback = new InterviewResultV2Response.VoiceFeedback(
+                    getNullableInt(voice, "overallVoiceScore"),
+                    getNullableInt(voice, "confidenceScore"),
+                    getNullableInt(voice, "fluencyScore"),
+                    getNullableInt(voice, "tremorRiskScore"),
+                    toStringList(voice.path("strengths")),
+                    toStringList(voice.path("weaknesses"))
+            );
+
+            return new InterviewResultV2Response.Feedback(
+                    score,
+                    oneLineFeedback,
+                    fullFeedback,
+                    sentimentScore,
+                    keywords,
+                    voiceFeedback
+            );
+
+        } catch (Exception e) {
+            return emptyFeedback();
+        }
+    }
+
+    private InterviewResultV2Response.Feedback emptyFeedback() {
+        return new InterviewResultV2Response.Feedback(
+                null,
+                null,
+                null,
+                null,
+                new InterviewResultV2Response.Keywords(
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        Collections.emptyList()
+                ),
+                new InterviewResultV2Response.VoiceFeedback(
+                        null,
+                        null,
+                        null,
+                        null,
+                        Collections.emptyList(),
+                        Collections.emptyList()
+                )
+        );
+    }
 
     private InterviewResultV2Response.Scores extractScoresSummary(String json) {
 
@@ -252,6 +322,7 @@ public class InterviewResultService {
 
         return def;
     }
+
     private Integer firstInt(JsonNode root, String... paths) {
         for (String path : paths) {
             Integer value = getIntPath(root, path);
@@ -318,5 +389,32 @@ public class InterviewResultService {
                 }
             }
         }
+    }
+
+    private Integer getNullableInt(JsonNode node, String field) {
+        JsonNode n = node.get(field);
+        if (n == null || n.isNull() || !n.isNumber()) {
+            return null;
+        }
+        return n.asInt();
+    }
+
+    private List<String> toStringList(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return Collections.emptyList();
+        }
+
+        List<String> out = new ArrayList<>();
+        for (JsonNode item : node) {
+            String s = item.asText("").trim();
+            if (!s.isBlank()) {
+                out.add(s);
+            }
+        }
+        return out;
+    }
+
+    private String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
     }
 }
