@@ -115,10 +115,10 @@ public class PortfolioAnalysisService {
                 .build();
         portfolioRepository.save(portfolio);
 
-        String ruleBasedFailReason = validateExtractedText(extractedText);
-        if (ruleBasedFailReason != null) {
-            return createRuleBasedFailResponse(ruleBasedFailReason, userNum, nickname, portfolio.getPortfolioId(), jobCategory);
-        }
+//        String ruleBasedFailReason = validateExtractedText(extractedText);
+//        if (ruleBasedFailReason != null) {
+//            return createRuleBasedFailResponse(ruleBasedFailReason, userNum, nickname, portfolio.getPortfolioId(), jobCategory);
+//        }
 
         List<String> base64Images = fileParserUtil.extractImagesAsBase64(file);
         String systemPrompt = getSystemPrompt();
@@ -137,12 +137,12 @@ public class PortfolioAnalysisService {
         }
     }
 
-    private String validateExtractedText(String text) {
-        if (text == null || text.trim().isEmpty()) return "파일에서 텍스트를 추출할 수 없습니다.";
-        String noSpaceText = text.replaceAll("\\s+", "");
-        if (noSpaceText.length() < 100) return "내용이 너무 짧습니다.";
-        return null;
-    }
+//    private String validateExtractedText(String text) {
+//        if (text == null || text.trim().isEmpty()) return "파일에서 텍스트를 추출할 수 없습니다.";
+//        String noSpaceText = text.replaceAll("\\s+", "");
+//        if (noSpaceText.length() < 100) return "내용이 너무 짧습니다.";
+//        return null;
+//    }
 
     private PortfolioAnalysisResponse createRuleBasedFailResponse(String reason, Long userId, String nickname, Long portfolioId, String jobCategory) {
         String scoreJsonStr = "{\"직무 적합성\":0, \"문제 해결력\":0, \"성장 잠재력\":0, \"협업·소통\":0, \"프로젝트 완성도\":0}";
