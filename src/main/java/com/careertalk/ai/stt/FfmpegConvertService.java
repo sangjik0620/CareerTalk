@@ -16,6 +16,8 @@ public class FfmpegConvertService {
 
         ProcessBuilder pb = new ProcessBuilder(
                 "ffmpeg",
+                "-nostdin",
+                "-loglevel", "error",
                 "-y",
                 "-i", input.toAbsolutePath().toString(),
                 "-ar", "16000",
@@ -25,10 +27,16 @@ public class FfmpegConvertService {
 
         pb.redirectErrorStream(true);
         Process p = pb.start();
+
+        String processOutput;
+        try (var is = p.getInputStream()) {
+            processOutput = new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        }
+
         int code = p.waitFor();
 
         if (code != 0) {
-            throw new IllegalStateException("ffmpeg convert failed. exit=" + code);
+            throw new IllegalStateException("ffmpeg convert failed. exit=" + code + "\n" + processOutput);
         }
         return output;
     }

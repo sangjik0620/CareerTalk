@@ -68,21 +68,26 @@ public class AudioFeatureExtractor {
     }
 
     private String runWithStderr(List<String> cmd) throws Exception {
-        Process p = new ProcessBuilder(cmd).start();
-        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
-        ByteArrayOutputStream stderr = new ByteArrayOutputStream();
 
-        try (InputStream is = p.getInputStream(); InputStream es = p.getErrorStream()) {
-            is.transferTo(stdout);
-            es.transferTo(stderr);
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true); // stderr → stdout 합침
+
+        Process p = pb.start();
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        try (InputStream is = p.getInputStream()) {
+            is.transferTo(output);
         }
 
         int code = p.waitFor();
-        String err = stderr.toString(StandardCharsets.UTF_8);
-        if (code != 0 && err.isBlank()) {
+        String out = output.toString(StandardCharsets.UTF_8);
+
+        if (code != 0 && out.isBlank()) {
             throw new IllegalStateException("Command failed: " + String.join(" ", cmd));
         }
-        return err;
+
+        return out;
     }
 
     public Double getSilenceRatio(Path audioPath) throws Exception {
@@ -90,6 +95,7 @@ public class AudioFeatureExtractor {
         // 필요하면 -30dB / 0.2s 등으로 조절
         List<String> cmd = List.of(
                 "ffmpeg",
+                "-hide_banner",
                 "-i", audioPath.toAbsolutePath().toString(),
                 "-af", "silencedetect=noise=-35dB:d=0.3",
                 "-f", "null",

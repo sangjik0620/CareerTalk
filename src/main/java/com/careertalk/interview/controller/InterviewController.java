@@ -80,32 +80,31 @@ public class InterviewController {
     public ResponseEntity<?> analyze(@PathVariable Long sessionId) {
         System.out.println("[ANALYZE] request start sessionId=" + sessionId);
 
-        // 0) evaluation row 없으면 먼저 생성
-        evaluationRepository.findBySessionId(sessionId)
-                .orElseGet(() -> {
-                    InterviewEvaluation eval = new InterviewEvaluation();
-                    eval.setSessionId(sessionId);
-                    eval.setOverallScore(0); // DB default 있어도 명시해주면 안전
-                    eval.setAnalysisStatus(AnalysisStatus.PENDING);
-                    return evaluationRepository.save(eval);
-                });
+        try {
+            evaluationRepository.findBySessionId(sessionId)
+                    .orElseGet(() -> {
+                        InterviewEvaluation eval = new InterviewEvaluation();
+                        eval.setSessionId(sessionId);
+                        eval.setOverallScore(0);
+                        eval.setAnalysisStatus(AnalysisStatus.PENDING);
+                        return evaluationRepository.save(eval);
+                    });
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            System.out.println("[ANALYZE] evaluation row already exists sessionId=" + sessionId);
+        }
 
-        // 1) PROCESSING 선점
         int updated = evaluationRepository.markProcessingIfPossible(sessionId);
         System.out.println("[ANALYZE] markProcessingIfPossible updated=" + updated);
 
-        // 2) 선점 성공 시에만 워커 실행
         if (updated == 1) {
             System.out.println("[ANALYZE] worker start sessionId=" + sessionId);
             interviewAnalysisWorker.runAsync(sessionId);
-
             return ResponseEntity.accepted().body(Map.of(
                     "sessionId", sessionId,
                     "status", "PROCESSING"
             ));
         }
 
-        // 3) 이미 진행중/완료된 경우 현재 상태 반환
         String status = evaluationRepository.findAnalysisStatusBySessionId(sessionId);
         System.out.println("[ANALYZE] existing status=" + status);
 
