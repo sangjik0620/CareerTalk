@@ -16,8 +16,11 @@ public class JwtUtil {
     private String secretKey = "vmfhaltmaskdgnsmlekgmleksmglksmlkgmslkgmleskmglksmglksmgleksmglksmglk";
     private Key key;
 
-    // 토큰 만료 시간 (30분)
-    private final long accessTokenExpiration = 30 * 60 * 1000L;
+//    토큰 만료 시간 (2시간)
+    private final long accessTokenExpiration = 2 * 60 * 60 * 1000L;
+    
+//    테스트용 (2분)
+//    private final long accessTokenExpiration = 2 * 60 * 1000L;
 
     @PostConstruct
     public void init() {
