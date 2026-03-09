@@ -15,10 +15,10 @@ public class PortfolioAnalysisResponse {
 
     private Long analysisId;
     private Long portfolioId;
-    private String targetJob;       // 목표 직무
+    private String targetJob;
     private Integer overallScore;
-    private String oneLineReview;   // 한 줄 평
-    private String summaryDetail;   // 상세 요약 피드백
+    private String oneLineReview;
+    private String summaryDetail;
 
     private List<ChartDataDto> chartData;
 

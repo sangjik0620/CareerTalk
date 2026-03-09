@@ -42,7 +42,7 @@ public class FileParserUtil {
         }
     }
 
-    // 모든 페이지를 Base64 이미지로 변환
+    // 모든 페이지를 이미지로 변환
     public List<String> extractImagesAsBase64(MultipartFile file) {
         List<String> base64Images = new ArrayList<>();
         String fileName = file.getOriginalFilename();
@@ -56,7 +56,7 @@ public class FileParserUtil {
                     PDFRenderer pdfRenderer = new PDFRenderer(document);
                     int pages = document.getNumberOfPages();
                     for (int i = 0; i < pages; i++) {
-                        // 50 DPI로 아주 흐릿하고 용량 작게 캡처 (비용/속도 최적화)
+                        // 50 DPI로 아주 흐릿하고 용량 작게 캡처
                         BufferedImage bim = pdfRenderer.renderImageWithDPI(i, 50);
                         base64Images.add(convertToBase64(bim));
                     }
@@ -74,29 +74,4 @@ public class FileParserUtil {
         return Base64.getEncoder().encodeToString(baos.toByteArray());
     }
 
-    // S3에서 다운받은 InputStream용 이미지 추출 로직 (재분석용)
-    public List<String> extractImagesAsBase64FromStream(java.io.InputStream inputStream, String fileName) {
-        List<String> base64Images = new ArrayList<>();
-        if (fileName == null) return base64Images;
-
-        fileName = fileName.toLowerCase();
-
-        try {
-            if (fileName.endsWith(".pdf")) {
-                try (PDDocument document = PDDocument.load(inputStream)) {
-                    PDFRenderer pdfRenderer = new PDFRenderer(document);
-                    int pages = document.getNumberOfPages();
-                    for (int i = 0; i < pages; i++) {
-                        BufferedImage bim = pdfRenderer.renderImageWithDPI(i, 50);
-                        base64Images.add(convertToBase64(bim));
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.error("Stream으로부터 이미지 썸네일 추출 중 에러 발생: {}", e.getMessage());
-        } finally {
-            try { if (inputStream != null) inputStream.close(); } catch (Exception ignore) {}
-        }
-        return base64Images;
-    }
 }
