@@ -11,8 +11,11 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import reactor.core.Exceptions;
 
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Python(FastAPI) 음성 분석 서비스 호출 클라이언트
@@ -32,6 +35,8 @@ public class PythonAudioAnalysisClient {
      * @param wavPath STT 후 변환된 WAV 파일 경로
      * @return Python 서비스 분석 결과 JSON
      */
+
+
     public JsonNode analyzeWav(Path wavPath) {
         FileSystemResource fileResource = new FileSystemResource(wavPath.toFile());
 
@@ -39,22 +44,35 @@ public class PythonAudioAnalysisClient {
         form.add("file", fileResource);
 
         try {
+            long start = System.currentTimeMillis();
+            System.out.println("[PythonAudioAnalysisClient] request start: " + wavPath);
+
             String raw = webClient.post()
                     .uri(baseUrl + "/analyze-audio")
                     .contentType(MediaType.MULTIPART_FORM_DATA)
                     .body(BodyInserters.fromMultipartData(form))
                     .retrieve()
                     .bodyToMono(String.class)
+                    .timeout(Duration.ofMinutes(3))
                     .block();
+
+            System.out.println("[PythonAudioAnalysisClient] response received: " +
+                    ((System.currentTimeMillis() - start) / 1000.0) + "s");
+
+            long end = System.currentTimeMillis();
+            System.out.println("[PythonAudioAnalysisClient] response received: " + ((end - start) / 1000.0) + "s");
 
             return new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
 
         } catch (WebClientResponseException e) {
-            // Python 서비스가 4xx/5xx 응답을 준 경우
             throw new IllegalStateException("Python audio analysis failed: "
                     + e.getStatusCode() + " body=" + e.getResponseBodyAsString(), e);
 
         } catch (Exception e) {
+            Throwable root = Exceptions.unwrap(e);
+            if (root instanceof TimeoutException) {
+                throw new IllegalStateException("Python audio analysis timeout after 3 minutes: " + wavPath, e);
+            }
             throw new IllegalStateException("Python audio analysis error: " + e.getMessage(), e);
         }
     }
