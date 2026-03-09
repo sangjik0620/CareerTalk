@@ -14,6 +14,7 @@ import com.careertalk.interview.repository.InterviewTurnRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,8 +22,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class TurnSttService {
@@ -42,26 +45,29 @@ public class TurnSttService {
 
     @Transactional
     public TurnSttResponse runStt(Long turnId, TurnSttRequest req) throws Exception {
+        log.info("[STT-STEP] 1. runStt start turnId={}", turnId);
 
         InterviewTurn turn = turnRepository.findById(turnId)
                 .orElseThrow(() -> new IllegalArgumentException("InterviewTurn not found: " + turnId));
+        log.info("[STT-STEP] 2. turn loaded turnId={}, audioFileId={}", turnId, turn.getAnswerAudioFileId());
 
         if (turn.getAnswerAudioFileId() == null) {
+            log.warn("[STT-STEP] answer_audio_file_id is null turnId={}", turnId);
             return toResponse(turn, "answer_audio_file_id is null", null);
         }
 
-        // ✅ 이미 파이프라인 끝났으면 스킵 (force=false)
         if (!req.isForce()
                 && turn.getSttStatus() == SttStatus.SUCCESS
                 && turn.getTurnAnalysisStatus() == TurnAnalysisStatus.DONE
                 && turn.getTurnScoreStatus() == TurnScoreStatus.DONE) {
+            log.info("[STT-STEP] already completed turnId={}", turnId);
             return toResponse(turn, null, nextPath(turn.getSessionId()));
         }
 
-        // ✅ 동시 실행 방지
         if (turn.getSttStatus() == SttStatus.PROCESSING
                 || turn.getTurnAnalysisStatus() == TurnAnalysisStatus.PROCESSING
                 || turn.getTurnScoreStatus() == TurnScoreStatus.PROCESSING) {
+            log.warn("[STT-STEP] already processing turnId={}", turnId);
             return toResponse(turn, "Turn pipeline is already processing", null);
         }
 
@@ -69,27 +75,38 @@ public class TurnSttService {
         Path tempWav = null;
 
         try {
-            // 0) 파일 조회 + 다운로드
+            log.info("[STT-STEP] 3. find audio file start turnId={}", turnId);
             FileEntity audioFile = fileRepository.findById(turn.getAnswerAudioFileId())
                     .orElseThrow(() -> new IllegalArgumentException("Audio file not found: " + turn.getAnswerAudioFileId()));
+            log.info("[STT-STEP] 4. find audio file done turnId={}, s3Key={}, originalName={}",
+                    turnId, audioFile.getS3Key(), audioFile.getOriginalName());
 
+            log.info("[STT-STEP] 5. s3 download start turnId={}", turnId);
             tempWebm = s3DownloadService.downloadToTempFile(audioFile.getS3Key(), audioFile.getOriginalName());
+            log.info("[STT-STEP] 6. s3 download done turnId={}, path={}", turnId, tempWebm);
 
             Path target = tempWebm;
+
             if (req.isToWav()) {
+                log.info("[STT-STEP] 7. ffmpeg start turnId={}", turnId);
                 tempWav = ffmpegConvertService.toWav16kMono(tempWebm);
+                log.info("[STT-STEP] 8. ffmpeg done turnId={}, path={}", turnId, tempWav);
                 target = tempWav;
             }
 
-            // 1) STT
+            log.info("[STT-STEP] 9. runSttStep start turnId={}", turnId);
             runSttStep(turn, target, req);
+            log.info("[STT-STEP] 10. runSttStep done turnId={}", turnId);
 
-            // 2) Turn Analysis (FastAPI + 기본지표 저장)
+            log.info("[STT-STEP] 11. runTurnAnalysisStep start turnId={}", turnId);
             runTurnAnalysisStep(turn, target, req);
+            log.info("[STT-STEP] 12. runTurnAnalysisStep done turnId={}", turnId);
 
-            // 3) Turn Score (Java scoring)
+            log.info("[STT-STEP] 13. runTurnScoreStep start turnId={}", turnId);
             runTurnScoreStep(turn, req);
+            log.info("[STT-STEP] 14. runTurnScoreStep done turnId={}", turnId);
 
+            log.info("[STT-STEP] 15. runStt end turnId={}", turnId);
             return toResponse(turn, null, nextPath(turn.getSessionId()));
 
         } finally {
@@ -128,16 +145,21 @@ public class TurnSttService {
     private void runTurnAnalysisStep(InterviewTurn turn, Path target, TurnSttRequest req) throws Exception {
         if (!req.isForce() && turn.getTurnAnalysisStatus() == TurnAnalysisStatus.DONE) return;
 
+        log.info("[TA] 1. start turnId={}", turn.getTurnId());
+
         turn.setTurnAnalysisStatus(TurnAnalysisStatus.PROCESSING);
         turn.setTurnAnalysisErrorMessage(null);
         turn.setTurnAnalysisAttemptCount(turn.getTurnAnalysisAttemptCount() + 1);
         turn.setTurnAnalysisStartedAt(LocalDateTime.now());
         turn.setTurnAnalysisCompletedAt(null);
         turnRepository.save(turn);
+        log.info("[TA] 2. set PROCESSING saved turnId={}", turn.getTurnId());
 
         try {
-            // 기본 지표
+            log.info("[TA] 3. duration start turnId={}", turn.getTurnId());
             double durationSec = audioFeatureExtractor.getDurationSeconds(target);
+            log.info("[TA] 4. duration done turnId={}, durationSec={}", turn.getTurnId(), durationSec);
+
             int durationInt = (int) Math.round(durationSec);
 
             String sttText = turn.getSttText();
@@ -146,16 +168,21 @@ public class TurnSttService {
 
             double wps = durationSec > 0 ? (wordCount / durationSec) : 0.0;
 
+            log.info("[TA] 5. meanVolume start turnId={}", turn.getTurnId());
             Double meanDb = audioFeatureExtractor.getMeanVolumeDb(target);
-            Double silenceRatio = audioFeatureExtractor.getSilenceRatio(target);
+            log.info("[TA] 6. meanVolume done turnId={}, meanDb={}", turn.getTurnId(), meanDb);
 
-            // FastAPI 분석 (wav일 때만 수행)
+            log.info("[TA] 7. silenceRatio start turnId={}", turn.getTurnId());
+            Double silenceRatio = audioFeatureExtractor.getSilenceRatio(target);
+            log.info("[TA] 8. silenceRatio done turnId={}, silenceRatio={}", turn.getTurnId(), silenceRatio);
+
             JsonNode pyRaw = null;
             if (req.isToWav()) {
+                log.info("[TA] 9. python analyze start turnId={}, path={}", turn.getTurnId(), target);
                 pyRaw = pythonAudioAnalysisClient.analyzeWav(target);
+                log.info("[TA] 10. python analyze done turnId={}", turn.getTurnId());
             }
 
-            // audio_metrics_json: 기본 지표 저장
             Map<String, Object> audioMetrics = new LinkedHashMap<>();
             audioMetrics.put("durationSec", durationSec);
             audioMetrics.put("wordCount", wordCount);
@@ -163,16 +190,11 @@ public class TurnSttService {
             audioMetrics.put("meanVolumeDb", meanDb);
             audioMetrics.put("silenceRatio", silenceRatio);
 
-            // python_metrics_json: extracted + raw(권장)
             Map<String, Object> pythonMetricsWrapper = null;
 
             if (pyRaw != null && !pyRaw.isNull()) {
+                log.info("[TA] 11. python parse start turnId={}", turn.getTurnId());
 
-                // 1) FastAPI 응답이 "raw 자체가 wrapper"일 수도 있고 (이미 raw/extracted/version이 있을 수도 있음)
-                //    보통은 raw가 곧 pitch/voiceQuality 구조임.
-                //    여기서는 "pyRaw가 pitch를 직접 들고 있다"는 전제 + fallback까지 지원.
-
-                // ✅ pitch 경로 후보들 (FastAPI 버전/키가 바뀌어도 최대한 살아남게)
                 Double pitchMean = firstNonNull(
                         getDoublePath(pyRaw, "pitch.pitchMeanHz"),
                         getDoublePath(pyRaw, "pitch.pitchMean"),
@@ -196,7 +218,6 @@ public class TurnSttService {
                         getDoublePath(pyRaw, "pitchCV")
                 );
 
-                // ✅ voiceQuality 경로 후보
                 Double jitterLocal = firstNonNull(
                         getDoublePath(pyRaw, "voiceQuality.jitterLocal"),
                         getDoublePath(pyRaw, "voice_quality.jitterLocal"),
@@ -222,26 +243,29 @@ public class TurnSttService {
                 extracted.put("jitterLocal", jitterLocal);
                 extracted.put("shimmerLocal", shimmerLocal);
 
-                // ✅ 스키마 고정을 위한 wrapper
                 pythonMetricsWrapper = new LinkedHashMap<>();
                 pythonMetricsWrapper.put("schema", "careertalk.python_metrics.v1");
                 pythonMetricsWrapper.put("version", "PYMET-1.0");
                 pythonMetricsWrapper.put("extracted", extracted);
-
-                // ✅ 원본은 그대로 저장 (디버깅/회귀 분석에 매우 유리)
                 pythonMetricsWrapper.put("raw", objectMapper.convertValue(pyRaw, Map.class));
+
+                log.info("[TA] 12. python parse done turnId={}", turn.getTurnId());
             }
 
-            // turn 저장
             turn.setAnswerAudioDurationSec(durationInt);
             turn.setAudioMetricsJson(objectMapper.writeValueAsString(audioMetrics));
-            turn.setPythonMetricsJson(pythonMetricsWrapper == null ? null : objectMapper.writeValueAsString(pythonMetricsWrapper));
+            turn.setPythonMetricsJson(
+                    pythonMetricsWrapper == null ? null : objectMapper.writeValueAsString(pythonMetricsWrapper)
+            );
 
+            log.info("[TA] 13. final save start turnId={}", turn.getTurnId());
             turn.setTurnAnalysisStatus(TurnAnalysisStatus.DONE);
             turn.setTurnAnalysisCompletedAt(LocalDateTime.now());
             turnRepository.save(turn);
+            log.info("[TA] 14. final save done turnId={}", turn.getTurnId());
 
         } catch (Exception e) {
+            log.error("[TA] FAILED turnId={}", turn.getTurnId(), e);
             turn.setTurnAnalysisStatus(TurnAnalysisStatus.FAILED);
             turn.setTurnAnalysisErrorMessage(e.getMessage());
             turn.setTurnAnalysisCompletedAt(LocalDateTime.now());
@@ -322,5 +346,41 @@ public class TurnSttService {
             if (v != null) return v;
         }
         return null;
+    }
+    @Transactional
+    public void processSessionTurns(Long sessionId) {
+        List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
+
+        log.info("[STT] processSessionTurns sessionId={}, turns={}", sessionId, turns.size());
+
+        for (InterviewTurn turn : turns) {
+            try {
+                log.info("[STT] start turnId={}, turnNo={}", turn.getTurnId(), turn.getTurnNo());
+
+                // 이미 완료된 턴이면 스킵
+                if (turn.getSttStatus() == SttStatus.SUCCESS
+                        && turn.getTurnAnalysisStatus() == TurnAnalysisStatus.DONE
+                        && turn.getTurnScoreStatus() == TurnScoreStatus.DONE) {
+                    log.info("[STT] skip already completed turnId={}", turn.getTurnId());
+                    continue;
+                }
+
+                // 오디오 파일이 없으면 스킵
+                if (turn.getAnswerAudioFileId() == null) {
+                    log.warn("[STT] skip no answerAudioFileId turnId={}", turn.getTurnId());
+                    continue;
+                }
+
+                TurnSttRequest req = new TurnSttRequest();
+                req.setToWav(true); // Python 음성분석까지 같이 돌릴 거면 true
+
+                runStt(turn.getTurnId(), req);
+
+                log.info("[STT] done turnId={}", turn.getTurnId());
+
+            } catch (Exception e) {
+                log.error("[STT] failed turnId={}, sessionId={}", turn.getTurnId(), sessionId, e);
+            }
+        }
     }
 }
