@@ -55,7 +55,7 @@ public class InterviewResultService {
                     parseJsonToMap(t.getAudioMetricsJson());
 
             Map<String, Object> pythonExtracted =
-                    extractPythonExtracted(t.getPythonMetricsJson());
+                    parseJsonToMap(t.getPythonMetricsJson());
 
             InterviewResultV2Response.Scores scores =
                     extractScoresSummary(t.getAudioScoresJson());
@@ -110,30 +110,6 @@ public class InterviewResultService {
         }
     }
 
-    private Map<String, Object> extractPythonExtracted(String json) {
-
-        if (json == null || json.isBlank()) return null;
-
-        try {
-
-            JsonNode root = objectMapper.readTree(json);
-
-            JsonNode extracted = root.get("extracted");
-
-            if (extracted != null && extracted.isObject()) {
-
-                return objectMapper.convertValue(
-                        extracted,
-                        new TypeReference<Map<String, Object>>() {}
-                );
-            }
-
-            return null;
-
-        } catch (Exception e) {
-            return null;
-        }
-    }
 
     private InterviewResultV2Response.Scores extractScoresSummary(String json) {
 
@@ -142,45 +118,58 @@ public class InterviewResultService {
         }
 
         try {
-
             JsonNode root = objectMapper.readTree(json);
 
-            Integer tremorRiskScore =
-                    getIntPath(root, "tremor.tremorRiskScore");
+            Integer tremorRiskScore = firstInt(
+                    root,
+                    "tremor.tremorRiskScore",
+                    "tremorRiskScore"
+            );
 
-            Integer confidenceScore =
-                    getIntPath(root, "confidence.confidenceScore");
+            Integer confidenceScore = firstInt(
+                    root,
+                    "confidence.confidenceScore",
+                    "confidenceScore"
+            );
 
-            Integer fluencyScore =
-                    getIntPath(root, "fluency.fluencyScore");
+            Integer fluencyScore = firstInt(
+                    root,
+                    "fluency.fluencyScore",
+                    "fluencyScore"
+            );
 
-            Integer overallScore =
-                    getIntPath(root, "overall.overallVoiceScore");
+            Integer overallScore = firstInt(
+                    root,
+                    "overall.overallVoiceScore",
+                    "overallVoiceScore"
+            );
 
-            String overallGrade =
-                    getTextPath(root, "overall.grade");
+            String overallGrade = firstText(
+                    root,
+                    "overall.grade",
+                    "overallGrade"
+            );
 
-            Double overallRel =
-                    getDoublePath(root, "overall.overallReliability");
+            Double overallRel = firstDouble(
+                    root,
+                    "overall.overallReliability",
+                    "overallReliability"
+            );
 
-            List<String> flags = new ArrayList<>();
+            if (overallRel == null) {
+                Double confRel = firstDouble(root, "confidence.analysisReliability");
+                Double tremorRel = firstDouble(root, "tremor.analysisReliability");
 
-            JsonNode flagsNode = getPath(root, "tremor.flags");
-
-            if (flagsNode != null && flagsNode.isArray()) {
-
-                for (JsonNode f : flagsNode) {
-
-                    String code =
-                            (f != null && f.get("code") != null)
-                                    ? f.get("code").asText()
-                                    : null;
-
-                    if (code != null && !code.isBlank()) {
-                        flags.add(code);
-                    }
+                if (confRel != null && tremorRel != null) {
+                    overallRel = (confRel + tremorRel) / 2.0;
+                } else if (confRel != null) {
+                    overallRel = confRel;
+                } else if (tremorRel != null) {
+                    overallRel = tremorRel;
                 }
             }
+
+            List<String> flags = extractFlags(root);
 
             Map<String, Object> raw =
                     objectMapper.convertValue(
@@ -206,7 +195,7 @@ public class InterviewResultService {
 
     private InterviewResultV2Response.Scores emptyScores() {
         return new InterviewResultV2Response.Scores(
-                null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, new ArrayList<>(), null
         );
     }
 
@@ -262,5 +251,72 @@ public class InterviewResultService {
         if (b != null && !b.isBlank()) return b;
 
         return def;
+    }
+    private Integer firstInt(JsonNode root, String... paths) {
+        for (String path : paths) {
+            Integer value = getIntPath(root, path);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private Double firstDouble(JsonNode root, String... paths) {
+        for (String path : paths) {
+            Double value = getDoublePath(root, path);
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private String firstText(JsonNode root, String... paths) {
+        for (String path : paths) {
+            String value = getTextPath(root, path);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private List<String> extractFlags(JsonNode root) {
+        List<String> out = new ArrayList<>();
+
+        collectFlagCodes(out, getPath(root, "tremor.flags"));
+        collectFlagCodes(out, getPath(root, "confidence.flags"));
+        collectFlagCodes(out, getPath(root, "flags"));
+
+        return out.stream().distinct().toList();
+    }
+
+    private void collectFlagCodes(List<String> out, JsonNode flagsNode) {
+        if (flagsNode == null || !flagsNode.isArray()) {
+            return;
+        }
+
+        for (JsonNode f : flagsNode) {
+            if (f == null) {
+                continue;
+            }
+
+            if (f.isTextual()) {
+                String code = f.asText();
+                if (!code.isBlank()) {
+                    out.add(code);
+                }
+                continue;
+            }
+
+            JsonNode codeNode = f.get("code");
+            if (codeNode != null) {
+                String code = codeNode.asText();
+                if (code != null && !code.isBlank()) {
+                    out.add(code);
+                }
+            }
+        }
     }
 }

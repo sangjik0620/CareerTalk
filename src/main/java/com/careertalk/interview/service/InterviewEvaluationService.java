@@ -159,37 +159,39 @@ public class InterviewEvaluationService {
 
             ObjectNode one = qArr.addObject();
             one.put("turnNo", safeInt(t.getTurnNo(), 0));
-            // 질문 출력이 필요 없으면 프론트에서 숨기면 됨. (서버는 DB값 그대로 제공)
             one.put("question", safe(t.getAiQuestion()));
             one.put("answer", answer);
 
-            // ✅ 여기서 서버가 feedback 텍스트를 만들지 않는다.
-            one.put("score", 0);
+            // LLM merge 전 기본값
+            one.putNull("score");
             one.put("oneLineFeedback", "");
             one.put("fullFeedback", "");
-
-            // (선택) 원본 지표를 노출하고 싶으면 아래처럼 raw로 묶어도 됨 (프론트가 안 쓰면 제거 가능)
-            // one.set("audioScores", parseJsonOrNull(t.getAudioScoresJson()));
-            // one.set("audioMetrics", parseJsonOrNull(t.getAudioMetricsJson()));
-            // one.set("pythonMetrics", parseJsonOrNull(t.getPythonMetricsJson()));
         }
 
-        // summary (수치 위주)
+        // summary
         ObjectNode summary = root.putObject("summary");
         summary.put("answeredQuestions", answered);
         summary.put("totalQuestions", total);
         summary.put("completionRate", total == 0 ? 0 : clamp0_100((int) Math.round(answered * 100.0 / total)));
 
-        // 간단한 수치 지표(필요 시 프론트 차트용)
         int avgRespSec = respSecCount == 0 ? 0 : (int) Math.round(totalRespSec * 1.0 / respSecCount);
         summary.put("avgResponseSec", Math.max(0, avgRespSec));
         summary.put("totalWordCount", Math.max(0, totalWords));
 
-        // overallScore: 서버가 임의 텍스트/룰로 만들지 않음. (LLM 또는 별도 점수 산식이 있으면 거기서)
-        summary.put("overallScore", 0);
-        summary.put("percentileRank", 0);
+        // 현재 세션만으로 계산 안 되거나 아직 산식이 없는 값은 null
+        summary.putNull("overallScore");
+        summary.putNull("percentileRank");
+        summary.putNull("previousScore");
+        summary.putNull("passedAverage");
+        summary.putNull("fillerWordRate");
+        summary.putNull("sentimentScore");
+        summary.putNull("jobFitIndex");
+        summary.putNull("confidenceIndex");
+        summary.putNull("technicalIndex");
+        summary.putNull("communicationIndex");
+        summary.putNull("verdict");
 
-        // ✅ 텍스트 필드는 비워둠: LLM이 반드시 채움
+        // LLM 채움 대상
         summary.set("topKeywords", objectMapper.createArrayNode());
         summary.set("strengths", objectMapper.createArrayNode());
         summary.set("weaknesses", objectMapper.createArrayNode());
@@ -201,13 +203,13 @@ public class InterviewEvaluationService {
         competency.set("soft", emptyCompetencyBlock());
         competency.set("improvements", objectMapper.createArrayNode());
 
-        // comparison (프론트가 쓰는 탭이 있으면 구조만 만들어 둠)
+        // comparison
         ObjectNode comparison = root.putObject("comparison");
-        comparison.put("percentileRank", 0);
+        comparison.putNull("percentileRank");
         comparison.set("scoreHistory", objectMapper.createArrayNode());
-        comparison.set("categoryComparison", objectMapper.createObjectNode());
+        comparison.set("categoryComparison", emptyCategoryComparison());
 
-        // interviewAnalysis.voiceCoaching도 LLM이 채움
+        // interviewAnalysis.voiceCoaching
         interview.set("voiceCoaching", objectMapper.createArrayNode());
 
         return root;
@@ -583,6 +585,23 @@ public class InterviewEvaluationService {
         block.put("current", current);
         block.put("target", target);
         block.set("details", details);
+        return block;
+    }
+    private ObjectNode emptyCategoryComparison() {
+        ObjectNode root = objectMapper.createObjectNode();
+
+        root.set("technical", emptyCategoryScoreBlock());
+        root.set("communication", emptyCategoryScoreBlock());
+        root.set("confidence", emptyCategoryScoreBlock());
+
+        return root;
+    }
+
+    private ObjectNode emptyCategoryScoreBlock() {
+        ObjectNode block = objectMapper.createObjectNode();
+        block.putNull("myScore");
+        block.putNull("averageScore");
+        block.putNull("previous");
         return block;
     }
 
