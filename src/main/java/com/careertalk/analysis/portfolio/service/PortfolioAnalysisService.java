@@ -115,10 +115,6 @@ public class PortfolioAnalysisService {
                 .build();
         portfolioRepository.save(portfolio);
 
-//        String ruleBasedFailReason = validateExtractedText(extractedText);
-//        if (ruleBasedFailReason != null) {
-//            return createRuleBasedFailResponse(ruleBasedFailReason, userNum, nickname, portfolio.getPortfolioId(), jobCategory);
-//        }
 
         List<String> base64Images = fileParserUtil.extractImagesAsBase64(file);
         String systemPrompt = getSystemPrompt();
@@ -137,37 +133,6 @@ public class PortfolioAnalysisService {
         }
     }
 
-//    private String validateExtractedText(String text) {
-//        if (text == null || text.trim().isEmpty()) return "파일에서 텍스트를 추출할 수 없습니다.";
-//        String noSpaceText = text.replaceAll("\\s+", "");
-//        if (noSpaceText.length() < 100) return "내용이 너무 짧습니다.";
-//        return null;
-//    }
-
-    private PortfolioAnalysisResponse createRuleBasedFailResponse(String reason, Long userId, String nickname, Long portfolioId, String jobCategory) {
-        String scoreJsonStr = "{\"직무 적합성\":0, \"문제 해결력\":0, \"성장 잠재력\":0, \"협업·소통\":0, \"프로젝트 완성도\":0}";
-        AnalysisEntity analysis = AnalysisEntity.builder()
-                .userNum(userId)
-                .targetType("PORTFOLIO")
-                .targetId(portfolioId)
-                .targetJob(jobCategory)
-                .overallScore(0)
-                .scoreJson(scoreJsonStr)
-                .expectedQuestionsJson("[]")
-                .ruleResultJson(String.format("{\"isPassed\": false, \"failReason\": \"%s\"}", reason))
-                .oneLineReview("❌ 분석 불가: " + reason)
-                .summaryDetail("시스템 1차 검증 결과, 포트폴리오 내용이 부족합니다.")
-                .status("SUCCESS")
-                .analyzedAt(java.time.LocalDateTime.now())
-                .build();
-
-        AnalysisEntity savedAnalysis = analysisRepository.save(analysis);
-        try {
-            return convertToResponseDto(savedAnalysis, nickname); // 💡 닉네임 전달
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException("응답 변환 오류");
-        }
-    }
 
     private PortfolioAnalysisResponse processAndSaveAiResult(String aiResultJson, Long userId, String nickname, Long portfolioId, String jobCategory, String status, String errorMessage) {
         if ("FAILED".equals(status)) {
