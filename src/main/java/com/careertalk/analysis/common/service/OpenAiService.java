@@ -24,7 +24,7 @@ public class OpenAiService {
     private final String OPENAI_URL = "https://api.openai.com/v1/chat/completions";
     private final RestTemplate restTemplate = new RestTemplate();
 
-    //  base64Images 파라미터 추가
+
     public String getAiResponse(String systemPrompt, String userPrompt, List<String> base64Images) {
 
         HttpHeaders headers = new HttpHeaders();
@@ -41,7 +41,7 @@ public class OpenAiService {
 
         if (base64Images != null && !base64Images.isEmpty()) {
             for (String base64 : base64Images) {
-                //  핵심: detail: low
+                // detail: low
                 contentList.add(Map.of(
                         "type", "image_url",
                         "image_url", Map.of(
