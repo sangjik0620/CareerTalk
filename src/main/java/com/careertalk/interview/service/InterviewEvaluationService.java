@@ -7,100 +7,81 @@ import com.careertalk.interview.repository.InterviewSessionRepository;
 import com.careertalk.interview.repository.InterviewTurnRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.NoSuchElementException;
-import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class InterviewEvaluationService {
+
     private final InterviewSessionRepository sessionRepository;
     private final InterviewTurnRepository turnRepository;
     private final InterviewEvaluationRepository evaluationRepository;
-    private final InterviewTurnFeedbackService turnFeedbackService;
+    private final InterviewOpenAiService interviewOpenAiService; // ✅ 인터뷰 전용 1회 호출 서비스
     private final ObjectMapper objectMapper;
 
+    @Value("classpath:prompts/interview_evaluation.txt")
+    private Resource interviewEvalSystemPrompt;
 
-    @Transactional
-    public JsonNode getOrCreateEvaluationResultJson(Long sessionId) {
-        String saved = evaluationRepository.findResultJsonBySessionId(sessionId);
-        if (saved != null && !saved.isBlank()) {
-            try {
-                return objectMapper.readTree(saved);
-            } catch (Exception ignored) {
-            }
-        }
-
-        InterviewSession session = sessionRepository.findById(sessionId)
-                .orElseThrow(() -> new NoSuchElementException("session not found"));
-        List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
-
-        //  1) STT 완료된 turn은 feedback_json 비어있으면 turn 분석 수행
-        for (InterviewTurn t : turns) {
-            boolean hasStt = t.getSttText() != null && !t.getSttText().isBlank();
-            boolean noFeedback = t.getFeedbackJson() == null || t.getFeedbackJson().isBlank();
-            if (hasStt && noFeedback) {
-                turnFeedbackService.analyzeAndSaveTurnFeedback(t);
-            }
-        }
-
-        //  2) turn feedback 기반으로 evaluation JSON 생성
-        ObjectNode json = buildEvaluationFromTurns(session, turns);
-        applyRealStats(json, sessionId, session);
-
-        int overall = json.path("summary").path("overallScore").asInt(0);
-
-        String jsonStr;
-        try {
-            jsonStr = objectMapper.writeValueAsString(json);
-        } catch (Exception e) {
-            throw new IllegalStateException("serialize failed", e);
-        }
-
-        String strengths = joinArray(json.path("summary").path("strengths"));
-        String weaknesses = joinArray(json.path("summary").path("weaknesses"));
-        String nextActions = joinNextActions(json.path("summary").path("nextActions"));
-
-        evaluationRepository.upsert(sessionId, overall, strengths, weaknesses, nextActions, jsonStr);
-        return json;
-    }
-
-    @Transactional
+    /**
+     * ✅ 분석 파이프라인 (유일한 생성 지점)
+     * - 세션/턴 로드
+     * - 서버는 "수치/구조"만 생성
+     * - LLM 1회 호출로 "텍스트/액션/키워드/보이스 코칭" 생성
+     * - DB upsert(result_json)
+     */
     public void runAnalysisInternal(Long sessionId) throws Exception {
         InterviewSession session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new NoSuchElementException("session not found"));
 
         List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
 
-        for (InterviewTurn t : turns) {
-            boolean hasStt = t.getSttText() != null && !t.getSttText().isBlank();
-            boolean noFeedback = t.getFeedbackJson() == null || t.getFeedbackJson().isBlank();
-            if (hasStt && noFeedback) {
-                turnFeedbackService.analyzeAndSaveTurnFeedback(t);
-            }
-        }
+        // 1) 서버 기본 구조 생성
+        ObjectNode evaluation = buildEvaluationSkeleton(session, turns);
 
-        ObjectNode json = buildEvaluationFromTurns(session, turns);
-        applyRealStats(json, sessionId, session);
+        // 2) LLM 결과 merge (트랜잭션 밖)
+        applyLlmInsights(evaluation, session, turns);
 
-        int overall = json.path("summary").path("overallScore").asInt(0);
+        // 3) 총점 계산
+        ObjectNode summary = (ObjectNode) evaluation.with("summary");
+        JsonNode questionResponses = evaluation.path("interviewAnalysis").path("questionResponses");
 
-        String jsonStr = objectMapper.writeValueAsString(json);
-        String strengths = joinArray(json.path("summary").path("strengths"));
-        String weaknesses = joinArray(json.path("summary").path("weaknesses"));
-        String nextActions = joinNextActions(json.path("summary").path("nextActions"));
+        int overall = computeOverallFromQuestionResponses(questionResponses);
+        summary.put("overallScore", overall);
+
+        // 4) DB 저장만 별도 트랜잭션
+        saveEvaluationResult(sessionId, overall, evaluation);
+    }
+
+    @Transactional
+    public void saveEvaluationResult(Long sessionId, int overall, ObjectNode evaluation) {
+        ObjectNode summary = (ObjectNode) evaluation.with("summary");
+
+        String jsonStr = safeWrite(evaluation);
+        String strengths = joinArray(summary.path("strengths"));
+        String weaknesses = joinArray(summary.path("weaknesses"));
+        String nextActions = joinNextActions(summary.path("nextActions"));
 
         evaluationRepository.upsert(sessionId, overall, strengths, weaknesses, nextActions, jsonStr);
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // Status helpers (Worker/Controller에서 사용)
+    // ─────────────────────────────────────────────────────────────
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markProcessing(Long sessionId) {
@@ -134,855 +115,494 @@ public class InterviewEvaluationService {
         return (status == null || status.isBlank()) ? "PENDING" : status;
     }
 
-    private ObjectNode buildEvaluationFromTurns(InterviewSession session, List<InterviewTurn> turns) {
+    // ─────────────────────────────────────────────────────────────
+    // 1) 서버 계산: "구조/수치"만 만들고 텍스트는 비움 (LLM이 채움)
+    // ─────────────────────────────────────────────────────────────
+
+    private ObjectNode buildEvaluationSkeleton(InterviewSession session, List<InterviewTurn> turns) {
         ObjectNode root = objectMapper.createObjectNode();
 
-        // 1) interviewInfo
-        ObjectNode interviewInfo = root.putObject("interviewInfo");
-        interviewInfo.put("date", session.getCreatedAt().toLocalDate().toString());
-        interviewInfo.put("duration", formatDuration(session.getStartedAt(), session.getEndedAt()));
-
-        String position = null;
-//         나중에 DB 컬럼 생기면 이 줄만 바꾸면 됨
-//        position = session.getPosition();
-        position = session.getTitle(); // 임시 fallback
-
-        if (position != null && !position.isBlank()) {
-            interviewInfo.put("position", position.trim());
+        // interviewInfo
+        ObjectNode info = root.putObject("interviewInfo");
+        if (session.getCreatedAt() != null) {
+            info.put("date", session.getCreatedAt().toLocalDate().toString());
+        } else {
+            info.put("date", "");
         }
+        info.put("duration", formatDuration(session.getStartedAt(), session.getEndedAt()));
 
-        // 2) turn feedback 파싱해서 questionResponses 만들기 + 점수/키워드 집계
-        int answeredQ = 0;
-        int totalQ = Math.max(turns.size(), 1);
+        // position: 현재 DB 컬럼 없어서 title로 유지(기존 코드 호환)
+        String position = safe(session.getTitle()).trim();
+        if (!position.isBlank()) info.put("position", position);
 
-        int scoreSum = 0;
-        int scoreCount = 0;
-
-        int totalWords = 0;
-        double avgRespSecSum = 0;
-        int avgRespCount = 0;
-
-        int sentimentSum = 0;
-        int sentimentCount = 0;
-
-        int kwTech = 0, kwSoft = 0, kwCompany = 0;
-
+        // interviewAnalysis
         ObjectNode interview = root.putObject("interviewAnalysis");
-        var qArr = interview.putArray("questionResponses");
+        ArrayNode qArr = interview.putArray("questionResponses");
 
-        int missingCnt = 0;
-        int repeatPenalty = 0;
-        int vaguePenalty = 0;
-        int offTopicPenalty = 0;
-        int longPenalty = 0;
+        int answered = 0;
+        int total = turns.size();
+        int totalWords = 0;
+        int totalRespSec = 0;
+        int respSecCount = 0;
 
         for (InterviewTurn t : turns) {
-            String resp = firstNonBlank(t.getUserAnswerText(), t.getSttText(), "");
-            if (!resp.isBlank()) answeredQ++;
+            String answer = safe(firstNonBlank(t.getUserAnswerText(), t.getSttText(), "")).trim();
+            if (!answer.isBlank()) answered++;
 
-            int wordCount = countWords(resp);
-            totalWords += wordCount;
+            totalWords += countWords(answer);
 
             Integer dur = t.getAnswerAudioDurationSec();
             if (dur != null && dur > 0) {
-                avgRespSecSum += dur;
-                avgRespCount++;
+                totalRespSec += dur;
+                respSecCount++;
             }
 
-            int score = 0;
-            String oneLine = "답변을 더 구체화해보세요.";
+            ObjectNode one = qArr.addObject();
+            one.put("turnNo", safeInt(t.getTurnNo(), 0));
+            one.put("question", safe(t.getAiQuestion()));
+            one.put("answer", answer);
 
-            if (t.getFeedbackJson() != null && !t.getFeedbackJson().isBlank()) {
-                try {
-                    JsonNode fb = objectMapper.readTree(t.getFeedbackJson());
-                    score = clamp(fb.path("score").asInt(0));
-                    oneLine = fb.path("feedback").asText(oneLine);
-
-                    scoreSum += score;
-                    scoreCount++;
-
-                    int sent = clamp(fb.path("sentimentScore").asInt(0));
-                    if (sent > 0) {
-                        sentimentSum += sent;
-                        sentimentCount++;
-                    }
-
-                    kwTech += fb.path("keywords").path("technical").isArray()
-                            ? fb.path("keywords").path("technical").size() : 0;
-                    kwSoft += fb.path("keywords").path("soft").isArray()
-                            ? fb.path("keywords").path("soft").size() : 0;
-                    kwCompany += fb.path("keywords").path("company").isArray()
-                            ? fb.path("keywords").path("company").size() : 0;
-
-                    // logic.missing 카운트
-                    JsonNode missing = fb.path("logic").path("missing");
-                    if (missing.isArray()) missingCnt += missing.size();
-
-                    // penalty 카운트
-                    JsonNode penalties = fb.path("penalty");
-                    if (penalties.isArray()) {
-                        for (JsonNode p : penalties) {
-                            String type = p.path("type").asText("");
-                            switch (type) {
-                                case "REPEAT" -> repeatPenalty++;
-                                case "VAGUE" -> vaguePenalty++;
-                                case "OFFTOPIC" -> offTopicPenalty++;
-                                case "LONG" -> longPenalty++;
-                            }
-                        }
-                    }
-
-                } catch (Exception ignored) {
-                }
-            }
-
-
-            ObjectNode q = qArr.addObject();
-            q.put("question", safe(t.getAiQuestion(), "질문 " + t.getTurnNo()));
-            q.put("response", resp.isBlank() ? "(답변 없음)" : resp);
-            q.put("score", score);
-            q.put("feedback", oneLine);
-            q.put("duration", dur != null ? dur : 0);
+            // LLM merge 전 기본값
+            one.putNull("score");
+            one.put("oneLineFeedback", "");
+            one.put("fullFeedback", "");
         }
 
-        int overall = scoreCount > 0 ? Math.round((float) scoreSum / scoreCount) : 0;
-
-        // 3) summary (프론트에서 제일 많이 씀)
+        // summary
         ObjectNode summary = root.putObject("summary");
-        summary.put("overallScore", overall);
+        summary.put("answeredQuestions", answered);
+        summary.put("totalQuestions", total);
+        summary.put("completionRate", total == 0 ? 0 : clamp0_100((int) Math.round(answered * 100.0 / total)));
 
-        summary.set("strengths", buildStrengths(turns));
-        summary.set("weaknesses", buildWeaknesses(turns));
-        summary.set("topKeywords", buildTopKeywords(turns, 3));
-        summary.set("nextActions", buildNextActions(summary.path("weaknesses")));
+        int avgRespSec = respSecCount == 0 ? 0 : (int) Math.round(totalRespSec * 1.0 / respSecCount);
+        summary.put("avgResponseSec", Math.max(0, avgRespSec));
+        summary.put("totalWordCount", Math.max(0, totalWords));
 
-        summary.put("totalQuestions", totalQ);
-        summary.put("answeredQuestions", answeredQ);
+        // 현재 세션만으로 계산 안 되거나 아직 산식이 없는 값은 null
+        summary.putNull("overallScore");
+        summary.putNull("percentileRank");
+        summary.putNull("previousScore");
+        summary.putNull("passedAverage");
+        summary.putNull("fillerWordRate");
+        summary.putNull("sentimentScore");
+        summary.putNull("jobFitIndex");
+        summary.putNull("confidenceIndex");
+        summary.putNull("technicalIndex");
+        summary.putNull("communicationIndex");
+        summary.putNull("verdict");
 
-        summary.put("verdict", pickVerdict(overall));
+        // LLM 채움 대상
+        summary.set("topKeywords", objectMapper.createArrayNode());
+        summary.set("strengths", objectMapper.createArrayNode());
+        summary.set("weaknesses", objectMapper.createArrayNode());
+        summary.set("nextActions", objectMapper.createArrayNode());
 
-        // NOTE: technical/communication/problem/leadership index는 buildCompetency가 실데이터 파생으로 덮어씀
+        // competency
+        ObjectNode competency = root.putObject("competency");
+        competency.set("technical", emptyCompetencyBlock());
+        competency.set("soft", emptyCompetencyBlock());
+        competency.set("improvements", objectMapper.createArrayNode());
 
-        double avgResp = avgRespCount > 0 ? (avgRespSecSum / avgRespCount) : 0;
-        summary.put("avgResponseTimeSec", round1(avgResp));
+        // comparison
+        ObjectNode comparison = root.putObject("comparison");
+        comparison.putNull("percentileRank");
+        comparison.set("scoreHistory", objectMapper.createArrayNode());
+        comparison.set("categoryComparison", emptyCategoryComparison());
 
-        summary.put("fillerWordRate", round1(Math.min(15.0,
-                (totalWords > 0 ? (double) countFillersAll(turns) / totalWords * 100.0 : 0)
-        )));
-        summary.put("sentimentScore", sentimentCount > 0 ? Math.round((float) sentimentSum / sentimentCount) : 0);
-
-        // 4) competency (summary가 생성된 뒤에 만들어야 함: buildCompetency가 summary/weaknesses를 참조)
-        ObjectNode competency = buildCompetency(turns, root);
-        root.set("competency", competency);
-
-        // 5) voiceMetrics / sttAnalysis (프론트가 기대)
-        ObjectNode voice = interview.putObject("voiceMetrics");
-        ObjectNode va = buildVoiceAnalysis(turns);
-
-        int confidenceIndex = computeConfidenceIndex(
-                va,
-                summary.path("fillerWordRate").asDouble(0),
-                summary.path("sentimentScore").asInt(0),
-                overall,
-                vaguePenalty,
-                repeatPenalty
-        );
-        summary.put("confidenceIndex", confidenceIndex);
-
-        int jobFitIndex = computeJobFitIndex(
-                overall,
-                kwTech, kwCompany, kwSoft,
-                offTopicPenalty, vaguePenalty, longPenalty, repeatPenalty,
-                missingCnt
-        );
-        summary.put("jobFitIndex", jobFitIndex);
-
-        voice.put("clarity", va.path("clarity").asInt(0));
-        voice.put("pace", va.path("speechRate").asInt(0));
-        voice.put("volume", va.path("volume").asInt(0));
-        voice.put("confidence", va.path("confidence").asInt(0));
-        voice.put("fillerWords", va.path("fillerCount").asInt(0));
-
-        ObjectNode stt = interview.putObject("sttAnalysis");
-        stt.put("totalWords", totalWords);
-        stt.put("averageResponseTime", round1(avgResp));
-
-        ObjectNode usage = stt.putObject("keywordUsage");
-        usage.put("technical", kwTech);
-        usage.put("soft", kwSoft);
-        usage.put("company", kwCompany);
-
-        stt.put("sentimentScore", sentimentCount > 0 ? Math.round((float) sentimentSum / sentimentCount) : 0);
-
-        // 6) comparison
-        root.set("comparison", buildComparison(session, root));
+        // interviewAnalysis.voiceCoaching
+        interview.set("voiceCoaching", objectMapper.createArrayNode());
 
         return root;
     }
 
-    private int countWords(String s) {
-        if (s == null || s.isBlank()) return 0;
-        return s.trim().split("\\s+").length;
-    }
+    // ─────────────────────────────────────────────────────────────
+    // 2) LLM 1회 호출 + merge (서버 템플릿/폴백 금지)
+    // ─────────────────────────────────────────────────────────────
 
-    private int countFillersAll(List<InterviewTurn> turns) {
-        int sum = 0;
+    private void applyLlmInsights(ObjectNode evaluation, InterviewSession session, List<InterviewTurn> turns) {
+        ObjectNode meta = evaluation.with("meta");
+        meta.put("llmProvider", "openai");
+        meta.put("llmModel", safe(modelNameOrUnknown()));
+        meta.put("llmStatus", "PENDING");
+
+        // 1) LLM 입력 payload
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("sessionId", session.getSessionId());
+        payload.put("position", safe(session.getTitle()));
+        payload.put("createdAt", session.getCreatedAt() == null ? "" : session.getCreatedAt().toString());
+
+        ArrayNode tArr = payload.putArray("turns");
         for (InterviewTurn t : turns) {
-            String resp = firstNonBlank(t.getUserAnswerText(), t.getSttText(), "");
-            sum += countFillers(resp);
+            ObjectNode one = tArr.addObject();
+            one.put("turnNo", safeInt(t.getTurnNo(), 0));
+            one.put("question", safe(t.getAiQuestion()));
+            one.put("answer", safe(firstNonBlank(t.getUserAnswerText(), t.getSttText(), "")).trim());
+            one.put("durationSec", safeInt(t.getAnswerAudioDurationSec(), 0));
         }
-        return sum;
+
+        String system = readResource(interviewEvalSystemPrompt);
+        String user = "면접 원자료:\n" + safeWrite(payload);
+
+        JsonNode out = interviewOpenAiService.callJsonOnly(system, user);
+
+        if (out == null || out.isNull()) {
+            meta.put("llmStatus", "FAILED");
+            throw new IllegalStateException("LLM output is null");
+        }
+
+        log.info("[LLM RAW OUT] summaryExists={}, competencyExists={}, interviewExists={}, qResponsesSize={}",
+                out.path("summary").isObject(),
+                out.path("competency").isObject(),
+                out.path("interviewAnalysis").isObject(),
+                out.path("interviewAnalysis").path("questionResponses").size());
+
+        if (out.has("error")) {
+            meta.put("llmStatus", "FAILED");
+            String raw = out.path("raw").asText("");
+            throw new IllegalStateException("LLM returned invalid JSON. raw=" + shorten(raw, 500));
+        }
+
+        // 2) summary merge
+        ObjectNode summary = (ObjectNode) evaluation.with("summary");
+        JsonNode outSummary = out.path("summary");
+        summary.set("topKeywords", normalizeTopKeywords(outSummary.path("topKeywords")));
+        summary.set("strengths", arrayOrEmpty(outSummary.path("strengths")));
+        summary.set("weaknesses", arrayOrEmpty(outSummary.path("weaknesses")));
+        summary.set("nextActions", normalizeNextActions(outSummary.path("nextActions")));
+
+        // 3) competency merge
+        ObjectNode competency = (ObjectNode) evaluation.with("competency");
+        JsonNode outComp = out.path("competency");
+
+        JsonNode technical = outComp.path("technical");
+        if (technical.isObject()) {
+            competency.set("technical", (ObjectNode) technical);
+        }
+
+        JsonNode soft = outComp.path("soft");
+        if (soft.isObject()) {
+            competency.set("soft", (ObjectNode) soft);
+        }
+
+        competency.set("improvements", normalizeImprovements(outComp.path("improvements")));
+
+        // 4) interviewAnalysis merge
+        ObjectNode interview = (ObjectNode) evaluation.with("interviewAnalysis");
+        JsonNode outInterview = out.path("interviewAnalysis");
+
+        interview.set("voiceCoaching", arrayOrEmpty(outInterview.path("voiceCoaching")));
+
+        mergeQuestionResponses(
+                (ArrayNode) interview.withArray("questionResponses"),
+                out.path("interviewAnalysis").path("questionResponses")
+        );
+
+        meta.put("llmStatus", "OK");
+        meta.put("llmMergedAt", LocalDateTime.now().toString());
     }
 
-    private ObjectNode triple(int user, int avg, int prev) {
-        ObjectNode n = objectMapper.createObjectNode();
-        n.put("user", clamp(user));
-        n.put("average", clamp(avg));
-        n.put("previous", clamp(prev));
-        return n;
+    /**
+     * topKeywords는 "딱 3개"를 원하니 normalize 해줌.
+     * - 부족하면 있는 것만 (빈 문자열은 제거)
+     * - 초과하면 앞 3개만
+     * - 서버가 기본 키워드 주입하는 폴백은 금지 (빈 배열 가능)
+     */
+    private ArrayNode normalizeTopKeywords(JsonNode node) {
+        ArrayNode out = objectMapper.createArrayNode();
+        if (node == null || !node.isArray()) return out;
+
+        for (JsonNode it : node) {
+            String s = it.asText("").trim();
+            if (s.isBlank()) continue;
+            out.add(s);
+            if (out.size() >= 3) break;
+        }
+        return out;
     }
+
+    /**
+     * 모델명 기록용 (원하면 삭제)
+     * InterviewOpenAiService에 model getter가 없으면 그냥 "unknown" 반환
+     */
+    private String modelNameOrUnknown() {
+        return "unknown";
+    }
+
+    /**
+     * 에러메시지 너무 길면 잘라서 예외 메시지에 넣기
+     */
+    private String shorten(String s, int max) {
+        if (s == null) return "";
+        String t = s.trim();
+        if (t.length() <= max) return t;
+        return t.substring(0, max) + "...";
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Utils
+    // ─────────────────────────────────────────────────────────────
 
     private String formatDuration(LocalDateTime startedAt, LocalDateTime endedAt) {
-        if (startedAt != null && endedAt != null) {
-            long sec = Duration.between(startedAt, endedAt).getSeconds();
-            long min = Math.max(1, sec / 60);
-            return min + "분";
+        if (startedAt == null || endedAt == null) return "";
+        try {
+            long sec = Math.max(0, Duration.between(startedAt, endedAt).getSeconds());
+            long mm = sec / 60;
+            long ss = sec % 60;
+            return String.format("%d:%02d", mm, ss);
+        } catch (Exception e) {
+            return "";
         }
-        return "시간 정보 없음";
     }
 
-    private String pickVerdict(int overall) {
-        if (overall >= 82) return "합격권";
-        if (overall >= 70) return "보류";
-        return "개선필요";
+    private String safeWrite(JsonNode node) {
+        try {
+            return objectMapper.writeValueAsString(node);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    private ArrayNode arrayOrEmpty(JsonNode node) {
+        if (node != null && node.isArray()) return (ArrayNode) node;
+        return objectMapper.createArrayNode();
+    }
+
+    private ArrayNode normalizeNextActions(JsonNode node) {
+        ArrayNode out = objectMapper.createArrayNode();
+        if (node == null || !node.isArray()) return out;
+
+        for (JsonNode it : node) {
+            String title = it.path("title").asText("").trim();
+            int dueDays = it.path("dueDays").asInt(0);
+            if (title.isBlank()) continue;
+
+            ObjectNode one = objectMapper.createObjectNode();
+            one.put("title", title);
+            one.put("dueDays", Math.max(0, dueDays));
+            out.add(one);
+        }
+        return out;
+    }
+
+    private ArrayNode normalizeImprovements(JsonNode node) {
+        ArrayNode out = objectMapper.createArrayNode();
+        if (node == null || !node.isArray()) return out;
+
+        for (JsonNode it : node) {
+            String area = it.path("area").asText("").trim();
+            String priority = it.path("priority").asText("medium").trim();
+            int current = clamp0_100(it.path("currentLevel").asInt(0));
+            int target = clamp0_100(it.path("targetLevel").asInt(0));
+            if (area.isBlank()) continue;
+
+            if (!priority.equals("high") && !priority.equals("medium") && !priority.equals("low")) {
+                priority = "medium";
+            }
+
+            ObjectNode one = objectMapper.createObjectNode();
+            one.put("area", area);
+            one.put("priority", priority);
+            one.put("currentLevel", current);
+            one.put("targetLevel", target);
+
+            ArrayNode items = objectMapper.createArrayNode();
+            JsonNode ai = it.path("actionItems");
+            if (ai.isArray()) {
+                for (JsonNode s : ai) {
+                    String v = s.asText("").trim();
+                    if (!v.isBlank()) items.add(v);
+                }
+            }
+            one.set("actionItems", items);
+            out.add(one);
+        }
+        return out;
+    }
+
+    private int clamp0_100(int v) {
+        if (v < 0) return 0;
+        if (v > 100) return 100;
+        return v;
     }
 
     private String joinArray(JsonNode arr) {
-        if (arr == null || !arr.isArray()) return null;
-        return toStream(arr).collect(Collectors.joining("\n"));
+        if (arr == null || !arr.isArray()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (JsonNode n : arr) {
+            String s = n.asText("").trim();
+            if (s.isBlank()) continue;
+            if (!sb.isEmpty()) sb.append(" | ");
+            sb.append(s);
+        }
+        return sb.toString();
     }
 
     private String joinNextActions(JsonNode arr) {
-        if (arr == null || !arr.isArray()) return null;
+        if (arr == null || !arr.isArray()) return "";
         StringBuilder sb = new StringBuilder();
         for (JsonNode n : arr) {
-            String title = n.path("title").asText("");
-            int due = n.path("dueDays").asInt(0);
-            if (!title.isBlank()) {
-                if (!sb.isEmpty()) sb.append("\n");
-                sb.append(title).append(" (D-").append(due).append(")");
-            }
+            String title = n.path("title").asText("").trim();
+            if (title.isBlank()) continue;
+            if (!sb.isEmpty()) sb.append(" | ");
+            sb.append(title);
         }
-        return sb.isEmpty() ? null : sb.toString();
+        return sb.toString();
     }
 
-    private java.util.stream.Stream<String> toStream(JsonNode arr) {
-        java.util.Iterator<JsonNode> it = arr.elements();
-        java.util.List<String> out = new java.util.ArrayList<>();
-        while (it.hasNext()) out.add(it.next().asText());
-        return out.stream();
+    private String safe(String v) {
+        return v == null ? "" : v;
     }
 
-    private int clamp(int v) {
-        return Math.max(0, Math.min(100, v));
+    private int safeInt(Integer v, int def) {
+        return v == null ? def : v;
     }
 
-    private double round1(double v) {
-        return Math.round(v * 10.0) / 10.0;
+    private String firstNonBlank(String a, String b, String def) {
+        if (a != null && !a.isBlank()) return a;
+        if (b != null && !b.isBlank()) return b;
+        return def;
     }
 
-    private boolean notBlank(String s) {
-        return s != null && !s.isBlank();
+    // 한국어/영어 섞여도 대충 단어 수 세기(차트용)
+    private int countWords(String s) {
+        if (s == null) return 0;
+        String t = s.trim();
+        if (t.isEmpty()) return 0;
+        return t.split("\\s+").length;
     }
 
-    private String safe(String s, String fallback) {
-        return notBlank(s) ? s : fallback;
-    }
-
-    private String firstNonBlank(String a, String b, String fallback) {
-        if (notBlank(a)) return a;
-        if (notBlank(b)) return b;
-        return fallback;
-    }
-
-    private void applyRealStats(ObjectNode json, Long sessionId, InterviewSession session) {
-        ObjectNode summary = (ObjectNode) json.path("summary");
-        if (summary == null || summary.isMissingNode() || summary.isNull()) return;
-
-        int overall = summary.path("overallScore").asInt(0);
-
-        // 1) 이전 점수
-        Integer prev = null;
-        if (session.getCreatedAt() != null) {
-            prev = evaluationRepository.findPrevOverallScore(session.getUserId(), session.getCreatedAt());
-        }
-        summary.put("previousScore", prev == null ? overall : prev);
-
-        // 2) 전체 평균
-        Double avg = evaluationRepository.findGlobalAverageScoreExcludingSession(sessionId);
-        summary.put("passedAverage", avg == null ? overall : (int) Math.round(avg));
-
-        // 3) 백분위(Percentile)
-        int pctInt = 50;
+    private String readResource(Resource r) {
         try {
-            Double pct = evaluationRepository.findPercentileRankExcludingSession(sessionId, overall);
-            if (pct != null) pctInt = (int) Math.round(pct);
-        } catch (Exception ignored) {
-        }
-
-        summary.put("percentileRank", clamp(pctInt));
-
-        JsonNode compNode = json.path("comparison");
-        if (compNode != null && compNode.isObject()) {
-            ((ObjectNode) compNode).put("percentileRank", clamp(pctInt));
+            return new String(r.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to read prompt resource", e);
         }
     }
 
-    private ObjectNode buildVoiceAnalysis(List<InterviewTurn> turns) {
-        ObjectNode voice = objectMapper.createObjectNode();
+    private int computeOverallFromQuestionResponses(JsonNode questionResponses) {
+        if (questionResponses == null || !questionResponses.isArray()) return 0;
 
-        double speechRateSum = 0;
-        double volumeSum = 0;
-        int metricsCount = 0;
-
-        double confidenceSum = 0;
-        double claritySum = 0;
-        int scoresCount = 0;
-
-        int fillerCount = 0;
-
-        for (InterviewTurn t : turns) {
-            fillerCount += countFillers(firstNonBlank(t.getUserAnswerText(), t.getSttText(), ""));
-
-            if (t.getAudioMetricsJson() != null && !t.getAudioMetricsJson().isBlank()) {
-                try {
-                    JsonNode metrics = objectMapper.readTree(t.getAudioMetricsJson());
-                    speechRateSum += metrics.path("speechRateWps").asDouble(0);
-                    volumeSum += metrics.path("meanVolumeDb").asDouble(0);
-                    metricsCount++;
-                } catch (Exception ignored) {
-                }
-            }
-
-            if (t.getAudioScoresJson() != null && !t.getAudioScoresJson().isBlank()) {
-                try {
-                    JsonNode scores = objectMapper.readTree(t.getAudioScoresJson());
-                    confidenceSum += scores.path("confidenceScore").asDouble(0);
-                    claritySum += scores.path("fluencyScore").asDouble(0);
-                    scoresCount++;
-                } catch (Exception ignored) {
-                }
-            }
-        }
-
-        double speechRate = metricsCount > 0 ? speechRateSum / metricsCount : 0;
-        double volumeDb = metricsCount > 0 ? volumeSum / metricsCount : 0;
-        double confidence = scoresCount > 0 ? confidenceSum / scoresCount : 0;
-        double clarity = scoresCount > 0 ? claritySum / scoresCount : 0;
-
-        int speechRateScore = normalizeSpeechRate(speechRate);
-        int volumeScore = normalizeVolume(volumeDb);
-
-        voice.put("speechRate", speechRateScore);
-        voice.put("volume", volumeScore);
-        voice.put("clarity", clamp((int) Math.round(clarity)));
-        voice.put("confidence", clamp((int) Math.round(confidence)));
-        voice.put("fillerCount", fillerCount);
-
-        return voice;
-    }
-
-    private int countFillers(String text) {
-        if (text == null) return 0;
-
-        String[] fillers = {"어", "음", "그", "저", "막", "약간", "그러니까", "그니까"};
+        int sum = 0;
         int count = 0;
-        for (String f : fillers) {
-            count += text.split(f, -1).length - 1;
-        }
-        return count;
-    }
 
-    private int normalizeSpeechRate(double wps) {
-        double score = (wps / 5.0) * 100;
-        if (score > 100) score = 100;
-        if (score < 0) score = 0;
-        return (int) score;
-    }
-
-    private int normalizeVolume(double db) {
-        double normalized = (db + 30) * 5;
-        if (normalized > 100) normalized = 100;
-        if (normalized < 0) normalized = 0;
-        return (int) normalized;
-    }
-
-    private com.fasterxml.jackson.databind.node.ArrayNode buildWeaknesses(List<InterviewTurn> turns) {
-        var counts = new java.util.LinkedHashMap<String, Integer>();
-
-        for (InterviewTurn t : turns) {
-            String fj = t.getFeedbackJson();
-            if (fj == null || fj.isBlank()) continue;
-
-            try {
-                JsonNode fb = objectMapper.readTree(fj);
-
-                JsonNode missing = fb.path("logic").path("missing");
-                if (missing.isArray() && missing.size() > 0) {
-                    bump(counts, "답변 구조화");
-                    for (JsonNode m : missing) {
-                        String s = m.asText("").trim();
-                        if (!s.isEmpty()) bump(counts, "논리 요소 누락(" + s + ")");
-                    }
-                }
-
-                JsonNode penalties = fb.path("penalty");
-                if (penalties.isArray()) {
-                    for (JsonNode p : penalties) {
-                        String type = p.path("type").asText("");
-                        switch (type) {
-                            case "REPEAT" -> bump(counts, "반복 표현");
-                            case "VAGUE" -> bump(counts, "구체성 부족");
-                            case "OFFTOPIC" -> bump(counts, "질문 의도 이탈");
-                            case "LONG" -> bump(counts, "장황함");
-                            default -> {
-                                if (!type.isBlank()) bump(counts, "표현 개선(" + type + ")");
-                            }
-                        }
-                    }
-                }
-
-                int score = fb.path("score").asInt(-1);
-                if (score >= 0 && score < 40) bump(counts, "답변 완성도 낮음");
-
-            } catch (Exception ignored) {
+        for (JsonNode item : questionResponses) {
+            int score = clamp0_100(item.path("score").asInt(0));
+            if (score > 0) {
+                sum += score;
+                count++;
             }
         }
 
-        if (counts.isEmpty()) {
-            bump(counts, "답변 구조화");
-            bump(counts, "구체성 부족");
-        }
-
-        return topLabels(counts, 3);
+        if (count == 0) return 0;
+        return clamp0_100((int) Math.round(sum * 1.0 / count));
     }
 
-    private com.fasterxml.jackson.databind.node.ArrayNode buildStrengths(List<InterviewTurn> turns) {
-        var counts = new java.util.LinkedHashMap<String, Integer>();
+    private void mergeQuestionResponses(ArrayNode baseArr, JsonNode outArr) {
+        if (baseArr == null || !baseArr.isArray()) return;
+        if (outArr == null || !outArr.isArray()) {
+            log.warn("[LLM MERGE] outArr is empty or not array");
+            return;
+        }
 
-        for (InterviewTurn t : turns) {
-            String fj = t.getFeedbackJson();
-            if (fj == null || fj.isBlank()) continue;
+        int mergedCount = 0;
 
-            try {
-                JsonNode fb = objectMapper.readTree(fj);
-
-                int score = fb.path("score").asInt(-1);
-                boolean hasMissing = fb.path("logic").path("missing").isArray()
-                        && fb.path("logic").path("missing").size() > 0;
-                boolean hasPenalty = fb.path("penalty").isArray()
-                        && fb.path("penalty").size() > 0;
-                int sentiment = fb.path("sentimentScore").asInt(-1);
-
-                if (score >= 70) bump(counts, "핵심 전달");
-                if (!hasMissing) bump(counts, "답변 구조화");
-                if (!hasPenalty && score >= 60) bump(counts, "표현의 깔끔함");
-                if (sentiment >= 60) bump(counts, "긍정적 태도");
-
-            } catch (Exception ignored) {
+        java.util.Map<Integer, JsonNode> byTurnNo = new java.util.HashMap<>();
+        for (JsonNode node : outArr) {
+            int turnNo = node.path("turnNo").asInt(0);
+            if (turnNo > 0) {
+                byTurnNo.put(turnNo, node);
             }
         }
 
-        if (counts.isEmpty()) {
-            bump(counts, "핵심 전달");
-            bump(counts, "답변 구조화");
-        }
+        for (JsonNode node : baseArr) {
+            if (!(node instanceof ObjectNode base)) continue;
 
-        return topLabels(counts, 3);
-    }
+            int turnNo = base.path("turnNo").asInt(0);
+            JsonNode llmNode = byTurnNo.get(turnNo);
+            if (llmNode == null || !llmNode.isObject()) continue;
 
-    private com.fasterxml.jackson.databind.node.ArrayNode buildTopKeywords(List<InterviewTurn> turns, int topN) {
-        var counts = new java.util.HashMap<String, Integer>();
+            int beforeScore = base.path("score").asInt(0);
 
-        for (InterviewTurn t : turns) {
-            String fj = t.getFeedbackJson();
-            if (fj == null || fj.isBlank()) continue;
+            int score = clamp0_100(llmNode.path("score").asInt(0));
+            if (score > 0) {
+                base.put("score", score);
+            }
 
-            try {
-                JsonNode fb = objectMapper.readTree(fj);
-                JsonNode kw = fb.path("keywords");
+            String oneLine = llmNode.path("oneLineFeedback").asText("").trim();
+            if (!oneLine.isBlank()) {
+                base.put("oneLineFeedback", oneLine);
+            }
 
-                addKeywords(counts, kw.path("technical"));
-                addKeywords(counts, kw.path("soft"));
-                addKeywords(counts, kw.path("company"));
+            String full = llmNode.path("fullFeedback").asText("").trim();
+            if (!full.isBlank()) {
+                base.put("fullFeedback", full);
+            }
 
-            } catch (Exception ignored) {
+            if (beforeScore != base.path("score").asInt(0) || !oneLine.isBlank() || !full.isBlank()) {
+                mergedCount++;
             }
         }
 
-        if (counts.isEmpty()) {
-            var arr = objectMapper.createArrayNode();
-            arr.add("프로젝트").add("협업").add("문제해결");
-            return arr;
-        }
-
-        return topLabels(counts, topN);
+        log.info("[LLM MERGE] merged questionResponses={}/{}", mergedCount, baseArr.size());
     }
 
-    private void addKeywords(java.util.Map<String, Integer> counts, JsonNode arr) {
-        if (!arr.isArray()) return;
-        for (JsonNode n : arr) {
-            String k = n.asText("").trim();
-            if (!k.isEmpty()) counts.put(k, counts.getOrDefault(k, 0) + 1);
-        }
+    private ObjectNode emptyCompetencyBlock() {
+        ObjectNode block = objectMapper.createObjectNode();
+        block.put("current", 0);
+        block.put("target", 0);
+        block.set("details", objectMapper.createObjectNode());
+        return block;
     }
 
-    private com.fasterxml.jackson.databind.node.ArrayNode buildNextActions(JsonNode weaknesses) {
-        var next = objectMapper.createArrayNode();
-        var added = new java.util.HashSet<String>();
+    private ObjectNode buildTechnicalCompetency(int overall) {
+        int current = clamp0_100(overall);
+        int target = clamp0_100(Math.max(current + 10, 80));
 
-        java.util.List<String> ws = new java.util.ArrayList<>();
-        if (weaknesses != null && weaknesses.isArray()) {
-            for (JsonNode w : weaknesses) ws.add(w.asText(""));
-        }
+        ObjectNode details = objectMapper.createObjectNode();
+        details.put("frontEnd", clamp0_100(current - 15));
+        details.put("backEnd", clamp0_100(current + 5));
+        details.put("database", clamp0_100(current));
+        details.put("deployment", clamp0_100(current - 3));
 
-        for (String w : ws) {
-            if (w.contains("구조화") || w.contains("논리")) {
-                addAction(next, added, "STAR 템플릿으로 10문항 연습", 7);
-                addAction(next, added, "결론 1문장 + 근거 2개로 답변 구성", 3);
-            }
-            if (w.contains("구체성")) {
-                addAction(next, added, "성과/수치화 사례 5개 정리", 5);
-            }
-            if (w.contains("반복")) {
-                addAction(next, added, "반복 표현 대체 문장 10개 준비", 3);
-            }
-            if (w.contains("장황")) {
-                addAction(next, added, "답변 30초/60초 버전으로 압축 연습", 3);
-            }
-            if (w.contains("의도")) {
-                addAction(next, added, "질문을 한 문장으로 재정의 후 답변 시작", 3);
-            }
-        }
-
-        if (next.isEmpty()) {
-            addAction(next, added, "답변 결론 1문장 습관화", 3);
-            addAction(next, added, "STAR 템플릿으로 10문항 연습", 7);
-        }
-
-        while (next.size() > 3) next.remove(next.size() - 1);
-        return next;
+        ObjectNode block = objectMapper.createObjectNode();
+        block.put("current", current);
+        block.put("target", target);
+        block.set("details", details);
+        return block;
     }
 
-    private void addAction(com.fasterxml.jackson.databind.node.ArrayNode next,
-                           java.util.Set<String> added,
-                           String title, int dueDays) {
-        if (added.add(title)) next.addObject().put("title", title).put("dueDays", dueDays);
+    private ObjectNode buildSoftCompetency(int overall) {
+        int current = clamp0_100(Math.max(overall - 3, 0));
+        int target = clamp0_100(Math.max(current + 10, 80));
+
+        ObjectNode details = objectMapper.createObjectNode();
+        details.put("communication", clamp0_100(current + 2));
+        details.put("teamwork", clamp0_100(current - 2));
+        details.put("leadership", clamp0_100(current - 6));
+        details.put("presentation", clamp0_100(current));
+
+        ObjectNode block = objectMapper.createObjectNode();
+        block.put("current", current);
+        block.put("target", target);
+        block.set("details", details);
+        return block;
+    }
+    private ObjectNode emptyCategoryComparison() {
+        ObjectNode root = objectMapper.createObjectNode();
+
+        root.set("technical", emptyCategoryScoreBlock());
+        root.set("communication", emptyCategoryScoreBlock());
+        root.set("confidence", emptyCategoryScoreBlock());
+
+        return root;
     }
 
-    private void bump(java.util.Map<String, Integer> counts, String key) {
-        counts.put(key, counts.getOrDefault(key, 0) + 1);
-    }
-
-    private com.fasterxml.jackson.databind.node.ArrayNode topLabels(java.util.Map<String, Integer> counts, int topN) {
-        var arr = objectMapper.createArrayNode();
-        counts.entrySet().stream()
-                .sorted((a, b) -> Integer.compare(b.getValue(), a.getValue()))
-                .limit(topN)
-                .forEach(e -> arr.add(e.getKey()));
-        return arr;
-    }
-
-    private ObjectNode buildComparison(InterviewSession session, ObjectNode root) {
-        ObjectNode comp = objectMapper.createObjectNode();
-
-        int pct = root.path("summary").path("percentileRank").asInt(0);
-        comp.put("percentileRank", clamp(pct));
-
-        var histArr = comp.putArray("scoreHistory");
-        try {
-            var rows = evaluationRepository.findRecentScoreHistory(session.getUserId(), 6);
-            java.util.Collections.reverse(rows);
-            for (Object[] r : rows) {
-                String ym = String.valueOf(r[0]);
-                int score = r[1] == null ? 0 : ((Number) r[1]).intValue();
-                histArr.addObject().put("date", ym).put("score", clamp(score));
-            }
-        } catch (Exception ignored) {
-        }
-
-        ObjectNode cat = comp.putObject("categoryComparison");
-
-        int tech = root.path("summary").path("technicalIndex").asInt(0);
-        int comm = root.path("summary").path("communicationIndex").asInt(0);
-        int prob = root.path("summary").path("problemIndex").asInt(0);
-        int lead = root.path("summary").path("leadershipIndex").asInt(0);
-
-        int avgTech = safeAvg(session.getSessionId(), "$.summary.technicalIndex");
-        int avgComm = safeAvg(session.getSessionId(), "$.summary.communicationIndex");
-        int avgProb = safeAvg(session.getSessionId(), "$.summary.problemIndex");
-        int avgLead = safeAvg(session.getSessionId(), "$.summary.leadershipIndex");
-
-        String prevJson = null;
-        try {
-            prevJson = evaluationRepository.findPrevResultJson(session.getUserId(), session.getCreatedAt());
-        } catch (Exception ignored) {
-        }
-
-        int prevTech = extractPrevIndex(prevJson, "technicalIndex", tech);
-        int prevComm = extractPrevIndex(prevJson, "communicationIndex", comm);
-        int prevProb = extractPrevIndex(prevJson, "problemIndex", prob);
-        int prevLead = extractPrevIndex(prevJson, "leadershipIndex", lead);
-
-        cat.set("technical", triple(clamp(tech), clamp(avgTech), clamp(prevTech)));
-        cat.set("communication", triple(clamp(comm), clamp(avgComm), clamp(prevComm)));
-        cat.set("problem", triple(clamp(prob), clamp(avgProb), clamp(prevProb)));
-        cat.set("leadership", triple(clamp(lead), clamp(avgLead), clamp(prevLead)));
-
-        return comp;
-    }
-
-    private int safeAvg(Long sessionId, String jsonPath) {
-        try {
-            Double d = evaluationRepository.avgFromResultJson(sessionId, jsonPath);
-            if (d == null) return 0;
-            return (int) Math.round(d);
-        } catch (Exception e) {
-            return 0;
-        }
-    }
-
-    private int extractPrevIndex(String prevResultJson, String field, int fallback) {
-        if (prevResultJson == null || prevResultJson.isBlank()) return fallback;
-        try {
-            JsonNode j = objectMapper.readTree(prevResultJson);
-            return clamp(j.path("summary").path(field).asInt(fallback));
-        } catch (Exception e) {
-            return fallback;
-        }
-    }
-
-    private ObjectNode buildCompetency(List<InterviewTurn> turns, ObjectNode root) {
-        ObjectNode comp = objectMapper.createObjectNode();
-
-        // summary는 buildEvaluationFromTurns에서 미리 생성됨
-        ObjectNode summary = (ObjectNode) root.path("summary");
-
-        // ===== 1) 기술 역량 =====
-        ObjectNode tech = comp.putObject("technical");
-
-        int fe = 0, be = 0, db = 0, dep = 0;
-        int techKwTotal = 0;
-
-        for (InterviewTurn t : turns) {
-            String fj = t.getFeedbackJson();
-            if (fj == null || fj.isBlank()) continue;
-            try {
-                JsonNode fb = objectMapper.readTree(fj);
-                JsonNode arr = fb.path("keywords").path("technical");
-                if (!arr.isArray()) continue;
-                for (JsonNode n : arr) {
-                    String k = n.asText("").toLowerCase();
-                    if (k.isBlank()) continue;
-                    techKwTotal++;
-
-                    if (k.contains("react") || k.contains("vue") || k.contains("html") || k.contains("css")
-                            || k.contains("javascript") || k.contains("typescript")) fe++;
-                    else if (k.contains("spring") || k.contains("java") || k.contains("node") || k.contains("api") || k.contains("jwt"))
-                        be++;
-                    else if (k.contains("mysql") || k.contains("sql") || k.contains("db") || k.contains("database") || k.contains("redis"))
-                        db++;
-                    else if (k.contains("aws") || k.contains("docker") || k.contains("k8") || k.contains("ci") || k.contains("cd") || k.contains("deploy"))
-                        dep++;
-                }
-            } catch (Exception ignored) {
-            }
-        }
-
-        int overall = summary.path("overallScore").asInt(0);
-
-        int techCurrent = clamp((int) Math.round(overall * 0.6 + Math.min(40, techKwTotal * 5)));
-        tech.put("current", techCurrent);
-        tech.put("target", 90);
-
-        ObjectNode techD = tech.putObject("details");
-        techD.put("frontEnd", clamp(fe * 12));
-        techD.put("backEnd", clamp(be * 12));
-        techD.put("database", clamp(db * 12));
-        techD.put("deployment", clamp(dep * 12));
-
-        // ===== 2) 소프트 스킬 =====
-        ObjectNode soft = comp.putObject("soft");
-
-        int missingCnt = 0;
-        int repeatPenalty = 0;
-        int vaguePenalty = 0;
-        int longPenalty = 0;
-        int offTopicPenalty = 0;
-        int softKw = 0;
-        int sentimentSum = 0, sentimentCount = 0;
-
-        for (InterviewTurn t : turns) {
-            String fj = t.getFeedbackJson();
-            if (fj == null || fj.isBlank()) continue;
-            try {
-                JsonNode fb = objectMapper.readTree(fj);
-
-                JsonNode missing = fb.path("logic").path("missing");
-                if (missing.isArray()) missingCnt += missing.size();
-
-                JsonNode penalties = fb.path("penalty");
-                if (penalties.isArray()) {
-                    for (JsonNode p : penalties) {
-                        String type = p.path("type").asText("");
-                        switch (type) {
-                            case "REPEAT" -> repeatPenalty++;
-                            case "VAGUE" -> vaguePenalty++;
-                            case "LONG" -> longPenalty++;
-                            case "OFFTOPIC" -> offTopicPenalty++;
-                        }
-                    }
-                }
-
-                JsonNode softArr = fb.path("keywords").path("soft");
-                if (softArr.isArray()) softKw += softArr.size();
-
-                int sent = fb.path("sentimentScore").asInt(0);
-                if (sent > 0) {
-                    sentimentSum += sent;
-                    sentimentCount++;
-                }
-
-            } catch (Exception ignored) {
-            }
-        }
-
-        int sentimentAvg = sentimentCount > 0 ? (int) Math.round((double) sentimentSum / sentimentCount) : 0;
-
-        int comm = clamp(80 - missingCnt * 8 - (repeatPenalty + vaguePenalty + longPenalty + offTopicPenalty) * 4);
-        int teamwork = clamp(30 + softKw * 8);
-        int leadership = clamp(20 + softKw * 6 + (int) Math.round(sentimentAvg * 0.4));
-        int presentation = clamp((int) Math.round(overall * 0.5 + 50 - longPenalty * 10 - repeatPenalty * 6));
-
-        int softCurrent = clamp((comm + teamwork + leadership + presentation) / 4);
-        soft.put("current", softCurrent);
-        soft.put("target", 85);
-
-        ObjectNode softD = soft.putObject("details");
-        softD.put("communication", comm);
-        softD.put("teamwork", teamwork);
-        softD.put("leadership", leadership);
-        softD.put("presentation", presentation);
-
-        // ===== 3) improvements (weaknesses 기반) =====
-        var improvements = comp.putArray("improvements");
-        JsonNode weaknesses = summary.path("weaknesses");
-
-        if (weaknesses != null && weaknesses.isArray() && weaknesses.size() > 0) {
-            for (int i = 0; i < Math.min(2, weaknesses.size()); i++) {
-                String w = weaknesses.get(i).asText("");
-                if (w.isBlank()) continue;
-
-                ObjectNode it = improvements.addObject();
-                it.put("area", w);
-                it.put("priority", i == 0 ? "high" : "medium");
-
-                int cur = clamp(overall - (i * 5));
-                it.put("currentLevel", cur);
-                it.put("targetLevel", clamp(cur + 20));
-
-                var act = it.putArray("actionItems");
-                if (w.contains("구조") || w.contains("논리")) {
-                    act.add("STAR 템플릿으로 10문항 작성");
-                    act.add("결론 1문장 → 근거 2개 → 결과 1문장 구조로 답변");
-                } else if (w.contains("구체")) {
-                    act.add("성과/수치가 포함된 사례 5개 준비");
-                    act.add("근거 없는 표현을 숫자/상황으로 치환");
-                } else if (w.contains("반복")) {
-                    act.add("자주 쓰는 반복 표현 리스트업 후 대체 표현 10개 준비");
-                } else if (w.contains("장황")) {
-                    act.add("답변 30초/60초 버전으로 요약 연습");
-                } else {
-                    act.add("문제 원인-해결-결과 형태로 3문장 요약 연습");
-                }
-            }
-        }
-
-        // ===== 4) comparison용 index를 summary에 실데이터로 저장 =====
-        summary.put("technicalIndex", techCurrent);
-        summary.put("communicationIndex", comm);
-        summary.put("problemIndex", clamp(70 - offTopicPenalty * 10 - missingCnt * 5));
-        summary.put("leadershipIndex", leadership);
-
-        return comp;
-    }
-
-    private int computeConfidenceIndex(
-            ObjectNode voiceAnalysis,     // buildVoiceAnalysis() 결과
-            double fillerWordRate,        // summary.fillerWordRate (0~15 정도)
-            int sentimentScore,           // summary.sentimentScore (0~100)
-            int overallScore,             // summary.overallScore
-            int vaguePenalty,
-            int repeatPenalty
-    ) {
-        // 음성 confidence/clarity는 0~100 스케일로 들어옴(없으면 0)
-        int vConf = clamp(voiceAnalysis.path("confidence").asInt(0));
-        int vClarity = clamp(voiceAnalysis.path("clarity").asInt(0));
-        int vPace = clamp(voiceAnalysis.path("speechRate").asInt(0));
-        int vVolume = clamp(voiceAnalysis.path("volume").asInt(0));
-
-        // fillerWordRate: 높을수록 감점 (0~15% 범위로 계산해둔 상태)
-        int fillerPenalty = (int) Math.round(Math.min(30.0, fillerWordRate * 2.0)); // 최대 -30
-
-        // 답변 품질 패널티 일부 반영 (자신감은 “주저/반복/애매함”에 민감)
-        int textPenalty = Math.min(20, vaguePenalty * 4 + repeatPenalty * 3);
-
-        // pace/volume은 “적정 범위” 선호 (너무 빠르거나 너무 조용하면 감점)
-        int paceStability = 100 - Math.abs(vPace - 70);     // 70 근처를 적정으로 가정
-        int volumeStability = 100 - Math.abs(vVolume - 65); // 65 근처를 적정으로 가정
-        paceStability = clamp(paceStability);
-        volumeStability = clamp(volumeStability);
-
-        // 최종 스코어(가중합)
-        double raw =
-                0.40 * vConf +
-                        0.20 * vClarity +
-                        0.10 * paceStability +
-                        0.10 * volumeStability +
-                        0.15 * clamp(sentimentScore) +
-                        0.05 * clamp(overallScore)
-                        - fillerPenalty
-                        - textPenalty;
-
-        return clamp((int) Math.round(raw));
-    }
-
-    private int computeJobFitIndex(
-            int overallScore,
-            int kwTech, int kwCompany, int kwSoft,
-            int offTopicPenalty, int vaguePenalty, int longPenalty, int repeatPenalty,
-            int missingCnt
-    ) {
-        // 키워드: 기술/기업 키워드는 직무 적합도에 더 직접적, 소프트는 보조
-        int kwScore = Math.min(60, kwTech * 6 + kwCompany * 10 + kwSoft * 3);
-
-        // 패널티: 질문 의도 이탈/구체성 부족/장황함/반복/논리누락은 적합도에 큰 감점
-        int penalty =
-                offTopicPenalty * 12 +
-                        vaguePenalty * 6 +
-                        longPenalty * 5 +
-                        repeatPenalty * 4 +
-                        missingCnt * 3;
-
-        penalty = Math.min(80, penalty);
-
-        // overall은 “기본 베이스”
-        double raw =
-                0.60 * clamp(overallScore) +
-                        0.40 * kwScore
-                        - penalty;
-
-        return clamp((int) Math.round(raw));
+    private ObjectNode emptyCategoryScoreBlock() {
+        ObjectNode block = objectMapper.createObjectNode();
+        block.putNull("myScore");
+        block.putNull("averageScore");
+        block.putNull("previous");
+        return block;
     }
 
 }

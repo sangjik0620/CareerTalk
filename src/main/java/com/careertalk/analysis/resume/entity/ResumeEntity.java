@@ -23,8 +23,8 @@ public class ResumeEntity {
     @Column(name = "resume_id")
     private Long resumeId;
 
-    @Column(name = "user_id", nullable = false)
-    private Long userId;
+    @Column(name = "user_num", nullable = false)
+    private Long userNum;
 
     @Column(name = "file_id", nullable = false)
     private Long fileId;
@@ -44,8 +44,8 @@ public class ResumeEntity {
     private LocalDateTime updatedAt;
 
     @Builder                                             // ✅ 추가: id·날짜 제외한 필드만 받는 빌더
-    public ResumeEntity(Long userId, Long fileId, String resumeTitle, String status) {
-        this.userId = userId;
+    public ResumeEntity(Long userNum, Long fileId, String resumeTitle, String status) {
+        this.userNum = userNum;
         this.fileId = fileId;
         this.resumeTitle = resumeTitle;
         this.status = status;

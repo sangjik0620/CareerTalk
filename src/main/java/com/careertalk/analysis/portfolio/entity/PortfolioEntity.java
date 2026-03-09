@@ -23,8 +23,8 @@ public class PortfolioEntity {
     @Column(name = "portfolio_id")
     private Long portfolioId;
 
-    @Column(name = "user_id", nullable = false)
-    private Long userId;
+    @Column(name = "user_num", nullable = false)
+    private Long userNum;
 
     @Column(name = "file_id", nullable = false)
     private Long fileId;
@@ -48,8 +48,8 @@ public class PortfolioEntity {
 
 
     @Builder
-    public PortfolioEntity(Long userId, Long fileId, String title, String status, String extractedText) {
-        this.userId = userId;
+    public PortfolioEntity(Long userNum, Long fileId, String title, String status, String extractedText) {
+        this.userNum = userNum;
         this.fileId = fileId;
         this.title = title;
         this.status = status;

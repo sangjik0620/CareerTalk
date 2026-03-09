@@ -60,22 +60,6 @@ public class InterviewEvaluation {
     @Column(name = "analysis_error_message")
     private String analysisErrorMessage;
 
-    public void setSessionId(Long sessionId) {
-    }
-
-    public void setOverallScore(int anInt) {
-    }
-
-    public JsonNode getResultJson() {
-        return null;
-    }
-
-    public void setResultJson(ObjectNode json) {
-    }
-
-    public void setGeneratedAt(LocalDateTime now) {
-    }
-
 }
 
 

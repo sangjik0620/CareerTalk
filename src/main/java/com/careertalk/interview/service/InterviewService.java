@@ -52,7 +52,7 @@ public class InterviewService {
         // 1) 세션 생성 (title은 DB DEFAULT)
         // 1) 세션 생성 (title 기본값 세팅)
         InterviewSession session = new InterviewSession();
-        session.setUserId(userId);
+        session.setUserNum(userId);
 
         // ✅ 추가: title 기본값
         session.setTitle(" AI 모의면접");
@@ -75,7 +75,7 @@ public class InterviewService {
 
                 // files insert
                 FileEntity f = new FileEntity();
-                f.setUserId(userId);
+                f.setUserNum(userId);
                 f.setFileType("AUDIO");
                 f.setOriginalName(audio.getOriginalFilename() == null ? "answer.webm" : audio.getOriginalFilename());
                 f.setMimeType(audio.getContentType() == null ? "audio/webm" : audio.getContentType());
@@ -114,6 +114,7 @@ public class InterviewService {
                 .map(InterviewTurn::getAnswerAudioFileId)
                 .filter(id -> id != null)
                 .distinct()
+                .sorted()
                 .toList();
 
         // 2) files 한 번에 로딩 → Map으로 변환
