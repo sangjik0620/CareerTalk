@@ -146,10 +146,15 @@ public class ResumeService {
     // GET /api/resumes/{analysisId}/result  ⭐ 추가
     // ──────────────────────────────────────────────
     @Transactional(readOnly = true)
-    public ResumeAnalysisResponse getAnalysisResult(Long analysisId) {
+    public ResumeAnalysisResponse getAnalysisResult(Long analysisId, Long currentUserNum) {
         AnalysisEntity analysis = analysisRepository.findById(analysisId)
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND, "해당 이력서의 분석 결과를 찾을 수 없습니다."));
+        // ✅ 본인 소유 확인 (추가)
+        if (!analysis.getUserNum().equals(currentUserNum)) {
+            throw new ResponseStatusException(
+                    HttpStatus.FORBIDDEN, "본인의 분석 결과만 조회할 수 있습니다.");
+        }
 
         // ✅ targetType 검증 추가
         if (!"RESUME".equals(analysis.getTargetType())) {
