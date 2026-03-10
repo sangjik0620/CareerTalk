@@ -60,8 +60,14 @@ public class InterviewEvaluationService {
 
         // 3) 총점 계산: 이제 turn.feedback_json 의 score 평균으로 계산
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
-        int overall = computeOverallFromTurnFeedbacks(turns);
+        ObjectNode comparison = (ObjectNode) evaluation.with("comparison");
+
+        int overall = computeOverallScore(turns, turns.size());
+        int percentileRank = calculatePercentile(overall, session.getSessionId());
+
         summary.put("overallScore", overall);
+        summary.put("percentileRank", percentileRank);
+        comparison.put("percentileRank", percentileRank);
 
         // 4) 세션 result_json 저장
         saveEvaluationResult(sessionId, overall, evaluation);
@@ -109,10 +115,10 @@ public class InterviewEvaluationService {
     public String getAnalysisStatus(Long sessionId) {
         String status = evaluationRepository.findAnalysisStatusBySessionId(sessionId);
         if (status == null || status.isBlank()) {
-            System.out.println("[STATUS] no evaluation row for sessionId=" + sessionId);
+//            System.out.println("[STATUS] no evaluation row for sessionId=" + sessionId);
             return "PENDING";
         }
-        System.out.println("[STATUS] sessionId=" + sessionId + ", status=" + status);
+//        System.out.println("[STATUS] sessionId=" + sessionId + ", status=" + status);
         return status;
     }
 
@@ -181,6 +187,7 @@ public class InterviewEvaluationService {
         summary.put("completionRate", total == 0 ? 0 : clamp0_100((int) Math.round(answered * 100.0 / total)));
         summary.put("avgResponseSec", Math.max(0, avgRespSec));
         summary.put("totalWordCount", Math.max(0, totalWords));
+        summary.put("fillerWordCount", (Integer) null);
 
         summary.putNull("overallScore");
         summary.putNull("percentileRank");
@@ -210,6 +217,7 @@ public class InterviewEvaluationService {
         comparison.putNull("percentileRank");
         comparison.set("scoreHistory", objectMapper.createArrayNode());
         comparison.set("categoryComparison", emptyCategoryComparison());
+
 
         return root;
     }
@@ -276,6 +284,7 @@ public class InterviewEvaluationService {
             throw new IllegalStateException("LLM output is null");
         }
 
+        log.info("[LLM SUMMARY RAW] {}", safeWrite(out.path("summary")));
         log.info("[LLM RAW OUT] summaryExists={}, competencyExists={}, interviewExists={}, qResponsesSize={}",
                 out.path("summary").isObject(),
                 out.path("competency").isObject(),
@@ -291,22 +300,27 @@ public class InterviewEvaluationService {
         // summary merge
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
         JsonNode outSummary = out.path("summary");
+
         summary.set("topKeywords", normalizeTopKeywords(outSummary.path("topKeywords")));
         summary.set("strengths", arrayOrEmpty(outSummary.path("strengths")));
         summary.set("weaknesses", arrayOrEmpty(outSummary.path("weaknesses")));
         summary.set("nextActions", normalizeNextActions(outSummary.path("nextActions")));
 
-        if (outSummary.path("jobFitIndex").isNumber()) {
-            summary.put("jobFitIndex", clamp0_100(outSummary.path("jobFitIndex").asInt()));
-        }
+        summary.put("jobFitIndex", clamp0_100(outSummary.path("jobFitIndex").asInt(0)));
+        summary.put("confidenceIndex", clamp0_100(outSummary.path("confidenceIndex").asInt(0)));
+        summary.put("technicalIndex", clamp0_100(outSummary.path("technicalIndex").asInt(0)));
+        summary.put("communicationIndex", clamp0_100(outSummary.path("communicationIndex").asInt(0)));
+        summary.put("sentimentScore", clamp0_100(outSummary.path("sentimentScore").asInt(0)));
 
-        if (outSummary.path("sentimentScore").isNumber()) {
-            int sentimentScore = clamp0_100(outSummary.path("sentimentScore").asInt());
-            summary.put("sentimentScore", sentimentScore);
+        int fillerWordCount = Math.max(0, outSummary.path("fillerWordCount").asInt(0));
+        summary.put("fillerWordCount", fillerWordCount);
 
-            ObjectNode sttAnalysis = (ObjectNode) evaluation.with("interviewAnalysis").with("sttAnalysis");
-            sttAnalysis.put("sentimentScore", sentimentScore);
+        int totalWordCount = Math.max(0, summary.path("totalWordCount").asInt(0));
+        int fillerWordRate = 0;
+        if (totalWordCount > 0) {
+            fillerWordRate = clamp0_100((int) Math.round((fillerWordCount * 100.0) / totalWordCount));
         }
+        summary.put("fillerWordRate", fillerWordRate);
 
         if (!outSummary.path("verdict").asText("").trim().isBlank()) {
             summary.put("verdict", outSummary.path("verdict").asText("").trim());
@@ -328,6 +342,42 @@ public class InterviewEvaluationService {
 
         competency.set("improvements", normalizeImprovements(outComp.path("improvements")));
 
+        // summary fallback
+        int technicalIndex = clamp0_100(summary.path("technicalIndex").asInt(0));
+        if (technicalIndex == 0 && competency.path("technical").path("current").isNumber()) {
+            technicalIndex = clamp0_100(competency.path("technical").path("current").asInt());
+        }
+        summary.put("technicalIndex", technicalIndex);
+
+        int communicationIndex = clamp0_100(summary.path("communicationIndex").asInt(0));
+        if (communicationIndex == 0 && competency.path("soft").path("details").path("communication").isNumber()) {
+            communicationIndex = clamp0_100(competency.path("soft").path("details").path("communication").asInt());
+        }
+        summary.put("communicationIndex", communicationIndex);
+
+        int confidenceIndex = clamp0_100(summary.path("confidenceIndex").asInt(0));
+        if (confidenceIndex == 0) {
+            int sum = 0;
+            int count = 0;
+            for (InterviewTurn t : turns) {
+                JsonNode scoreRoot = parseJson(t.getAudioScoresJson());
+                Integer c = firstInt(
+                        scoreRoot,
+                        "confidence.confidenceScore",
+                        "confidenceScore",
+                        "voice.confidenceScore"
+                );
+                if (c != null) {
+                    sum += c;
+                    count++;
+                }
+            }
+            if (count > 0) {
+                confidenceIndex = clamp0_100((int) Math.round(sum * 1.0 / count));
+            }
+        }
+        summary.put("confidenceIndex", confidenceIndex);
+
         // interviewAnalysis merge
         ObjectNode interview = (ObjectNode) evaluation.with("interviewAnalysis");
         JsonNode outInterview = out.path("interviewAnalysis");
@@ -348,11 +398,37 @@ public class InterviewEvaluationService {
             keywordUsage.put("company", Math.max(0, keywordUsageNode.path("company").asInt(0)));
         }
 
+        sttAnalysis.put("sentimentScore", clamp0_100(outSummary.path("sentimentScore").asInt(0)));
+
         // questionResponses 는 turn.feedback_json 으로 저장
         saveQuestionResponsesToTurns(turns, outInterview.path("questionResponses"));
 
         meta.put("llmStatus", "OK");
         meta.put("llmMergedAt", LocalDateTime.now().toString());
+    }
+
+    private int calculatePercentile(int overallScore, Long sessionId) {
+
+        List<Object[]> rows = evaluationRepository.getScoreStats(overallScore, sessionId);
+
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+
+        Object[] stats = rows.get(0);
+
+        long lowerCount = stats[0] == null ? 0L : ((Number) stats[0]).longValue();
+        long equalCount = stats[1] == null ? 0L : ((Number) stats[1]).longValue();
+        long totalCount = stats[2] == null ? 0L : ((Number) stats[2]).longValue();
+
+        if (totalCount <= 0) {
+            return 0;
+        }
+
+        double percentile =
+                ((lowerCount + (equalCount * 0.5)) * 100.0) / totalCount;
+
+        return clamp0_100((int) Math.round(percentile));
     }
 
     /**
@@ -574,7 +650,21 @@ public class InterviewEvaluationService {
      * 총점은 세션 result_json.questionResponses 가 아니라
      * interview_turn.feedback_json.score 평균으로 계산
      */
-    private int computeOverallFromTurnFeedbacks(List<InterviewTurn> turns) {
+    private int computeOverallScore(List<InterviewTurn> turns, int totalQuestions) {
+        double contentScore = computeContentScore(turns);
+        double voiceScore = computeVoiceScore(turns);
+        double completionScore = computeCompletionScore(turns, totalQuestions);
+
+        int overall = (int) Math.round(
+                contentScore * 0.60 +
+                        voiceScore * 0.25 +
+                        completionScore * 0.15
+        );
+
+        return clamp0_100(overall);
+    }
+
+    private int computeContentScore(List<InterviewTurn> turns) {
         int sum = 0;
         int count = 0;
 
@@ -586,8 +676,36 @@ public class InterviewEvaluationService {
                 JsonNode node = objectMapper.readTree(json);
                 int score = clamp0_100(node.path("score").asInt(0));
 
-                if (score > 0) {
-                    sum += score;
+                sum += score;
+                count++;
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (count == 0) return 0;
+        return clamp0_100((int) Math.round(sum * 1.0 / count));
+    }
+
+    private int computeVoiceScore(List<InterviewTurn> turns) {
+        int sum = 0;
+        int count = 0;
+
+        for (InterviewTurn turn : turns) {
+            try {
+                String json = turn.getAudioScoresJson();
+                if (json == null || json.isBlank()) continue;
+
+                JsonNode node = objectMapper.readTree(json);
+
+                Integer score = firstInt(
+                        node,
+                        "overall.overallVoiceScore",
+                        "overallVoiceScore",
+                        "voice.overallVoiceScore"
+                );
+
+                if (score != null) {
+                    sum += clamp0_100(score);
                     count++;
                 }
             } catch (Exception ignored) {
@@ -596,6 +714,26 @@ public class InterviewEvaluationService {
 
         if (count == 0) return 0;
         return clamp0_100((int) Math.round(sum * 1.0 / count));
+    }
+
+    private int computeCompletionScore(List<InterviewTurn> turns, int totalQuestions) {
+        if (totalQuestions <= 0) return 0;
+
+        int answered = 0;
+
+        for (InterviewTurn turn : turns) {
+            String answer = firstNonBlank(
+                    turn.getUserAnswerText(),
+                    turn.getSttText(),
+                    ""
+            ).trim();
+
+            if (!answer.isBlank()) {
+                answered++;
+            }
+        }
+
+        return clamp0_100((int) Math.round(answered * 100.0 / totalQuestions));
     }
 
     private ObjectNode emptyCompetencyBlock() {
@@ -621,6 +759,7 @@ public class InterviewEvaluationService {
         block.putNull("previous");
         return block;
     }
+
     private JsonNode parseJson(String json) {
         try {
             if (json == null || json.isBlank()) {
