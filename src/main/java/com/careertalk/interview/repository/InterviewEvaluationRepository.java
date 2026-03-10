@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -79,7 +80,7 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
             LIMIT 1
             """, nativeQuery = true)
     Integer findPrevOverallScore(
-            @Param("userId") Long userId,
+            @Param("userNum") Long userNum,
             @Param("createdAt") java.time.LocalDateTime createdAt
     );
 
@@ -113,7 +114,7 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
     );
 
     @Query(value = """
-            SELECT DATE_FORMAT(s.created_at, '%Y-%m') AS ym, e.overall_score AS score
+            SELECT DATE_FORMAT(s.created_at, '%m-%d') AS label, e.overall_score AS score
             FROM interview_sessions s
             JOIN interview_evaluations e ON e.session_id = s.session_id
             WHERE s.user_num = :userNum
@@ -122,7 +123,7 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
             ORDER BY s.created_at DESC
             LIMIT :limit
             """, nativeQuery = true)
-    java.util.List<Object[]> findRecentScoreHistory(@Param("userId") Long userId, @Param("limit") int limit);
+    java.util.List<Object[]> findRecentScoreHistory(@Param("userNum") Long userNum, @Param("limit") int limit);
 
     @Query(value = """
             SELECT e.result_json
@@ -135,7 +136,7 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
             ORDER BY s.created_at DESC
             LIMIT 1
             """, nativeQuery = true)
-    String findPrevResultJson(@Param("userId") Long userId, @Param("createdAt") java.time.LocalDateTime createdAt);
+    String findPrevResultJson(@Param("userNum") Long userNum, @Param("createdAt") java.time.LocalDateTime createdAt);
 
     @Query(value = """
             SELECT AVG(CAST(JSON_UNQUOTE(JSON_EXTRACT(result_json, :jsonPath)) AS DECIMAL(10,2)))
@@ -159,16 +160,32 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
     Optional<InterviewEvaluation> findBySessionId(Long sessionId);
 
     @Query("""
-SELECT
-SUM(CASE WHEN e.overallScore < :score THEN 1 ELSE 0 END),
-SUM(CASE WHEN e.overallScore = :score THEN 1 ELSE 0 END),
-COUNT(e)
-FROM InterviewEvaluation e
-WHERE e.overallScore IS NOT NULL
-AND e.analysisStatus = 'DONE'
-AND e.sessionId <> :sessionId
-""")
+            SELECT
+            SUM(CASE WHEN e.overallScore < :score THEN 1 ELSE 0 END),
+            SUM(CASE WHEN e.overallScore = :score THEN 1 ELSE 0 END),
+            COUNT(e)
+            FROM InterviewEvaluation e
+            WHERE e.overallScore IS NOT NULL
+            AND e.analysisStatus = 'DONE'
+            AND e.sessionId <> :sessionId
+            """)
     List<Object[]> getScoreStats(@Param("score") int score,
                                  @Param("sessionId") Long sessionId);
 
+    @Query(value = """
+        SELECT DATE_FORMAT(s.created_at, '%m-%d') AS label, e.overall_score AS score, s.session_id
+        FROM interview_sessions s
+        JOIN interview_evaluations e ON e.session_id = s.session_id
+        WHERE s.user_num = :userNum
+          AND s.created_at <= :currentCreatedAt
+          AND e.analysis_status = 'DONE'
+          AND e.overall_score IS NOT NULL
+        ORDER BY s.created_at DESC
+        LIMIT :limit
+        """, nativeQuery = true)
+    List<Object[]> findScoreHistoryUntilCurrent(
+            @Param("userNum") Long userNum,
+            @Param("currentCreatedAt") LocalDateTime currentCreatedAt,
+            @Param("limit") int limit
+    );
 }

@@ -1,5 +1,6 @@
 package com.careertalk.interview.service;
 
+import com.careertalk.interview.dto.ComparisonResponse;
 import com.careertalk.interview.dto.InterviewResultV2Response;
 import com.careertalk.interview.dto.InterviewSessionResultResponse;
 import com.careertalk.interview.entity.InterviewTurn;
@@ -21,6 +22,7 @@ public class InterviewResultService {
     private final InterviewService interviewService;
     private final InterviewEvaluationService evaluationService;
     private final InterviewTurnRepository turnRepository;
+    private final InterviewComparisonService comparisonService;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -28,6 +30,10 @@ public class InterviewResultService {
 
         String analysisStatus = evaluationService.getAnalysisStatus(sessionId);
         JsonNode evaluation = evaluationService.getEvaluationResultJsonOrNull(sessionId);
+
+        JsonNode sanitizedEvaluation = sanitizeEvaluation(evaluation);
+
+        ComparisonResponse comparison = comparisonService.buildComparison(sessionId, sanitizedEvaluation);
 
         InterviewSessionResultResponse voice = interviewService.getVoiceResult(sessionId);
 
@@ -45,23 +51,14 @@ public class InterviewResultService {
         List<InterviewResultV2Response.TurnDetail> details = new ArrayList<>();
 
         for (InterviewTurn t : turnEntities) {
-
-            InterviewSessionResultResponse.TurnItem voiceItem =
-                    voiceTurnMap.get(t.getTurnNo());
-
+            InterviewSessionResultResponse.TurnItem voiceItem = voiceTurnMap.get(t.getTurnNo());
             String audioUrl = (voiceItem != null) ? voiceItem.audioUrl() : null;
 
-            Map<String, Object> audioMetrics =
-                    parseJsonToMap(t.getAudioMetricsJson());
+            Map<String, Object> audioMetrics = parseJsonToMap(t.getAudioMetricsJson());
+            Map<String, Object> pythonExtracted = parseJsonToMap(t.getPythonMetricsJson());
 
-            Map<String, Object> pythonExtracted =
-                    parseJsonToMap(t.getPythonMetricsJson());
-
-            InterviewResultV2Response.Scores scores =
-                    extractScoresSummary(t.getAudioScoresJson());
-
-            InterviewResultV2Response.Feedback feedback =
-                    extractFeedbackSummary(t.getFeedbackJson());
+            InterviewResultV2Response.Scores scores = extractScoresSummary(t.getAudioScoresJson());
+            InterviewResultV2Response.Feedback feedback = extractFeedbackSummary(t.getFeedbackJson());
 
             InterviewResultV2Response.Audio audio =
                     new InterviewResultV2Response.Audio(
@@ -96,9 +93,24 @@ public class InterviewResultService {
                 sessionId,
                 analysisStatus,
                 LocalDateTime.now(),
-                evaluation,
+                sanitizedEvaluation,
+                comparison,
                 details
         );
+    }
+
+    private JsonNode sanitizeEvaluation(JsonNode evaluation) {
+        if (evaluation == null || !evaluation.isObject()) {
+            return evaluation;
+        }
+
+        JsonNode copy = evaluation.deepCopy();
+
+        if (copy instanceof com.fasterxml.jackson.databind.node.ObjectNode obj) {
+            obj.remove("comparison");
+        }
+
+        return copy;
     }
 
     private Map<String, Object> parseJsonToMap(String json) {

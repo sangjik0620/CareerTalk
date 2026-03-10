@@ -11,6 +11,7 @@ public record InterviewResultV2Response(
         String analysisStatus,
         LocalDateTime generatedAt,
         JsonNode evaluation,
+        ComparisonResponse comparison,
         List<TurnDetail> turns
 ) {
     public record TurnDetail(
