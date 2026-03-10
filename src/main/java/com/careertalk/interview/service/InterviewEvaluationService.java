@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -59,8 +60,14 @@ public class InterviewEvaluationService {
 
         // 3) 총점 계산: 이제 turn.feedback_json 의 score 평균으로 계산
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
-        int overall = computeOverallFromTurnFeedbacks(turns);
+        ObjectNode comparison = (ObjectNode) evaluation.with("comparison");
+
+        int overall = computeOverallScore(turns, turns.size());
+        int percentileRank = calculatePercentile(overall, session.getSessionId());
+
         summary.put("overallScore", overall);
+        summary.put("percentileRank", percentileRank);
+        comparison.put("percentileRank", percentileRank);
 
         // 4) 세션 result_json 저장
         saveEvaluationResult(sessionId, overall, evaluation);
@@ -108,10 +115,10 @@ public class InterviewEvaluationService {
     public String getAnalysisStatus(Long sessionId) {
         String status = evaluationRepository.findAnalysisStatusBySessionId(sessionId);
         if (status == null || status.isBlank()) {
-            System.out.println("[STATUS] no evaluation row for sessionId=" + sessionId);
+//            System.out.println("[STATUS] no evaluation row for sessionId=" + sessionId);
             return "PENDING";
         }
-        System.out.println("[STATUS] sessionId=" + sessionId + ", status=" + status);
+//        System.out.println("[STATUS] sessionId=" + sessionId + ", status=" + status);
         return status;
     }
 
@@ -155,19 +162,32 @@ public class InterviewEvaluationService {
             }
         }
 
+        int avgRespSec = respSecCount == 0 ? 0 : (int) Math.round(totalRespSec * 1.0 / respSecCount);
+
         // interviewAnalysis
         ObjectNode interview = root.putObject("interviewAnalysis");
         interview.set("voiceCoaching", objectMapper.createArrayNode());
+
+        ObjectNode sttAnalysis = interview.putObject("sttAnalysis");
+        sttAnalysis.put("totalWords", Math.max(0, totalWords));
+        sttAnalysis.put("averageResponseTime", Math.max(0, avgRespSec));
+        sttAnalysis.putNull("sentimentScore");
+
+        ObjectNode keywordUsage = sttAnalysis.putObject("keywordUsage");
+        keywordUsage.put("technical", 0);
+        keywordUsage.put("soft", 0);
+        keywordUsage.put("company", 0);
+
+        sttAnalysis.put("overallFeedback", "");
 
         // summary
         ObjectNode summary = root.putObject("summary");
         summary.put("answeredQuestions", answered);
         summary.put("totalQuestions", total);
         summary.put("completionRate", total == 0 ? 0 : clamp0_100((int) Math.round(answered * 100.0 / total)));
-
-        int avgRespSec = respSecCount == 0 ? 0 : (int) Math.round(totalRespSec * 1.0 / respSecCount);
         summary.put("avgResponseSec", Math.max(0, avgRespSec));
         summary.put("totalWordCount", Math.max(0, totalWords));
+        summary.put("fillerWordCount", (Integer) null);
 
         summary.putNull("overallScore");
         summary.putNull("percentileRank");
@@ -198,6 +218,7 @@ public class InterviewEvaluationService {
         comparison.set("scoreHistory", objectMapper.createArrayNode());
         comparison.set("categoryComparison", emptyCategoryComparison());
 
+
         return root;
     }
 
@@ -224,6 +245,33 @@ public class InterviewEvaluationService {
             one.put("question", safe(t.getAiQuestion()));
             one.put("answer", safe(firstNonBlank(t.getUserAnswerText(), t.getSttText(), "")).trim());
             one.put("durationSec", safeInt(t.getAnswerAudioDurationSec(), 0));
+
+            JsonNode scoreRoot = parseJson(t.getAudioScoresJson());
+            ObjectNode voice = one.putObject("voice");
+            voice.put("overallVoiceScore", nvl(firstInt(
+                    scoreRoot,
+                    "overall.overallVoiceScore",
+                    "overallVoiceScore",
+                    "voice.overallVoiceScore"
+            )));
+            voice.put("confidenceScore", nvl(firstInt(
+                    scoreRoot,
+                    "confidence.confidenceScore",
+                    "confidenceScore",
+                    "voice.confidenceScore"
+            )));
+            voice.put("fluencyScore", nvl(firstInt(
+                    scoreRoot,
+                    "fluency.fluencyScore",
+                    "fluencyScore",
+                    "voice.fluencyScore"
+            )));
+            voice.put("tremorRiskScore", nvl(firstInt(
+                    scoreRoot,
+                    "tremor.tremorRiskScore",
+                    "tremorRiskScore",
+                    "voice.tremorRiskScore"
+            )));
         }
 
         String system = readResource(interviewEvalSystemPrompt);
@@ -236,6 +284,7 @@ public class InterviewEvaluationService {
             throw new IllegalStateException("LLM output is null");
         }
 
+        log.info("[LLM SUMMARY RAW] {}", safeWrite(out.path("summary")));
         log.info("[LLM RAW OUT] summaryExists={}, competencyExists={}, interviewExists={}, qResponsesSize={}",
                 out.path("summary").isObject(),
                 out.path("competency").isObject(),
@@ -251,10 +300,31 @@ public class InterviewEvaluationService {
         // summary merge
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
         JsonNode outSummary = out.path("summary");
+
         summary.set("topKeywords", normalizeTopKeywords(outSummary.path("topKeywords")));
         summary.set("strengths", arrayOrEmpty(outSummary.path("strengths")));
         summary.set("weaknesses", arrayOrEmpty(outSummary.path("weaknesses")));
         summary.set("nextActions", normalizeNextActions(outSummary.path("nextActions")));
+
+        summary.put("jobFitIndex", clamp0_100(outSummary.path("jobFitIndex").asInt(0)));
+        summary.put("confidenceIndex", clamp0_100(outSummary.path("confidenceIndex").asInt(0)));
+        summary.put("technicalIndex", clamp0_100(outSummary.path("technicalIndex").asInt(0)));
+        summary.put("communicationIndex", clamp0_100(outSummary.path("communicationIndex").asInt(0)));
+        summary.put("sentimentScore", clamp0_100(outSummary.path("sentimentScore").asInt(0)));
+
+        int fillerWordCount = Math.max(0, outSummary.path("fillerWordCount").asInt(0));
+        summary.put("fillerWordCount", fillerWordCount);
+
+        int totalWordCount = Math.max(0, summary.path("totalWordCount").asInt(0));
+        int fillerWordRate = 0;
+        if (totalWordCount > 0) {
+            fillerWordRate = clamp0_100((int) Math.round((fillerWordCount * 100.0) / totalWordCount));
+        }
+        summary.put("fillerWordRate", fillerWordRate);
+
+        if (!outSummary.path("verdict").asText("").trim().isBlank()) {
+            summary.put("verdict", outSummary.path("verdict").asText("").trim());
+        }
 
         // competency merge
         ObjectNode competency = (ObjectNode) evaluation.with("competency");
@@ -262,20 +332,73 @@ public class InterviewEvaluationService {
 
         JsonNode technical = outComp.path("technical");
         if (technical.isObject()) {
-            competency.set("technical", (ObjectNode) technical);
+            competency.set("technical", technical.deepCopy());
         }
 
         JsonNode soft = outComp.path("soft");
         if (soft.isObject()) {
-            competency.set("soft", (ObjectNode) soft);
+            competency.set("soft", soft.deepCopy());
         }
 
         competency.set("improvements", normalizeImprovements(outComp.path("improvements")));
 
+        // summary fallback
+        int technicalIndex = clamp0_100(summary.path("technicalIndex").asInt(0));
+        if (technicalIndex == 0 && competency.path("technical").path("current").isNumber()) {
+            technicalIndex = clamp0_100(competency.path("technical").path("current").asInt());
+        }
+        summary.put("technicalIndex", technicalIndex);
+
+        int communicationIndex = clamp0_100(summary.path("communicationIndex").asInt(0));
+        if (communicationIndex == 0 && competency.path("soft").path("details").path("communication").isNumber()) {
+            communicationIndex = clamp0_100(competency.path("soft").path("details").path("communication").asInt());
+        }
+        summary.put("communicationIndex", communicationIndex);
+
+        int confidenceIndex = clamp0_100(summary.path("confidenceIndex").asInt(0));
+        if (confidenceIndex == 0) {
+            int sum = 0;
+            int count = 0;
+            for (InterviewTurn t : turns) {
+                JsonNode scoreRoot = parseJson(t.getAudioScoresJson());
+                Integer c = firstInt(
+                        scoreRoot,
+                        "confidence.confidenceScore",
+                        "confidenceScore",
+                        "voice.confidenceScore"
+                );
+                if (c != null) {
+                    sum += c;
+                    count++;
+                }
+            }
+            if (count > 0) {
+                confidenceIndex = clamp0_100((int) Math.round(sum * 1.0 / count));
+            }
+        }
+        summary.put("confidenceIndex", confidenceIndex);
+
         // interviewAnalysis merge
         ObjectNode interview = (ObjectNode) evaluation.with("interviewAnalysis");
         JsonNode outInterview = out.path("interviewAnalysis");
+
         interview.set("voiceCoaching", arrayOrEmpty(outInterview.path("voiceCoaching")));
+
+        ObjectNode sttAnalysis = (ObjectNode) interview.with("sttAnalysis");
+        JsonNode outStt = outInterview.path("sttAnalysis");
+
+        String overallFeedback = outStt.path("overallFeedback").asText("").trim();
+        sttAnalysis.put("overallFeedback", overallFeedback);
+
+        JsonNode keywordUsageNode = outStt.path("keywordUsage");
+        if (keywordUsageNode.isObject()) {
+            ObjectNode keywordUsage = (ObjectNode) sttAnalysis.with("keywordUsage");
+            keywordUsage.put("technical", Math.max(0, keywordUsageNode.path("technical").asInt(0)));
+            keywordUsage.put("soft", Math.max(0, keywordUsageNode.path("soft").asInt(0)));
+            keywordUsage.put("company", Math.max(0, keywordUsageNode.path("company").asInt(0)));
+        }
+
+        sttAnalysis.put("sentimentScore", clamp0_100(outSummary.path("sentimentScore").asInt(0)));
 
         // questionResponses 는 turn.feedback_json 으로 저장
         saveQuestionResponsesToTurns(turns, outInterview.path("questionResponses"));
@@ -284,9 +407,33 @@ public class InterviewEvaluationService {
         meta.put("llmMergedAt", LocalDateTime.now().toString());
     }
 
+    private int calculatePercentile(int overallScore, Long sessionId) {
+
+        List<Object[]> rows = evaluationRepository.getScoreStats(overallScore, sessionId);
+
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+
+        Object[] stats = rows.get(0);
+
+        long lowerCount = stats[0] == null ? 0L : ((Number) stats[0]).longValue();
+        long equalCount = stats[1] == null ? 0L : ((Number) stats[1]).longValue();
+        long totalCount = stats[2] == null ? 0L : ((Number) stats[2]).longValue();
+
+        if (totalCount <= 0) {
+            return 0;
+        }
+
+        double percentile =
+                ((lowerCount + (equalCount * 0.5)) * 100.0) / totalCount;
+
+        return clamp0_100((int) Math.round(percentile));
+    }
+
     /**
      * LLM questionResponses -> interview_turn.feedback_json 저장
-     * 기존 feedback_json 이 있으면 score/feedback 만 덮고 나머지는 보존
+     * feedback_json 은 기존값 merge 없이 turn별로 새로 생성하여 저장한다.
      */
     private void saveQuestionResponsesToTurns(List<InterviewTurn> turns, JsonNode outArr) {
         if (outArr == null || !outArr.isArray()) {
@@ -310,16 +457,10 @@ public class InterviewEvaluationService {
 
             ObjectNode feedback = objectMapper.createObjectNode();
 
-            // 1) score
             feedback.put("score", clamp0_100(node.path("score").asInt(0)));
-
-            // 2) oneLineFeedback
             feedback.put("oneLineFeedback", node.path("oneLineFeedback").asText("").trim());
-
-            // 3) fullFeedback
             feedback.put("fullFeedback", node.path("fullFeedback").asText("").trim());
 
-            // 4) sentimentScore
             JsonNode sentimentNode = node.get("sentimentScore");
             if (sentimentNode != null && !sentimentNode.isNull() && sentimentNode.isNumber()) {
                 feedback.put("sentimentScore", clamp0_100(sentimentNode.asInt()));
@@ -327,7 +468,6 @@ public class InterviewEvaluationService {
                 feedback.putNull("sentimentScore");
             }
 
-            // 5) keywords
             JsonNode keywordsNode = node.get("keywords");
             if (keywordsNode != null && keywordsNode.isArray()) {
                 feedback.set("keywords", keywordsNode.deepCopy());
@@ -345,90 +485,6 @@ public class InterviewEvaluationService {
 
         log.info("[LLM MERGE] saved turn feedback_json={}/{}", savedCount, turns.size());
     }
-
-//    private ObjectNode parseExistingFeedback(String json) {
-//        try {
-//            if (json != null && !json.isBlank()) {
-//                JsonNode node = objectMapper.readTree(json);
-//                if (node.isObject()) {
-//                    return (ObjectNode) node;
-//                }
-//            }
-//        } catch (Exception ignored) {
-//        }
-//
-//        ObjectNode feedback = objectMapper.createObjectNode();
-//        feedback.put("score", 0);
-//        feedback.put("oneLineFeedback", "");
-//        feedback.put("fullFeedback", "");
-//        feedback.put("sentimentScore", 0);
-//
-//        ObjectNode keywords = objectMapper.createObjectNode();
-//        keywords.putArray("technical");
-//        keywords.putArray("soft");
-//        keywords.putArray("company");
-//        feedback.set("keywords", keywords);
-//
-//        ObjectNode voice = objectMapper.createObjectNode();
-//        voice.putNull("overallVoiceScore");
-//        voice.putNull("confidenceScore");
-//        voice.putNull("fluencyScore");
-//        voice.putNull("tremorRiskScore");
-//        voice.putArray("strengths");
-//        voice.putArray("weaknesses");
-//        feedback.set("voice", voice);
-//
-//        return feedback;
-//    }
-
-//    private void ensureFeedbackShape(ObjectNode feedback) {
-//        if (!feedback.has("score")) {
-//            feedback.put("score", 0);
-//        }
-//        if (!feedback.has("oneLineFeedback")) {
-//            feedback.put("oneLineFeedback", "");
-//        }
-//        if (!feedback.has("fullFeedback")) {
-//            feedback.put("fullFeedback", "");
-//        }
-//        if (!feedback.has("sentimentScore")) {
-//            feedback.put("sentimentScore", 0);
-//        }
-//
-//        JsonNode kw = feedback.path("keywords");
-//        if (!kw.isObject()) {
-//            ObjectNode keywords = objectMapper.createObjectNode();
-//            keywords.putArray("technical");
-//            keywords.putArray("soft");
-//            keywords.putArray("company");
-//            feedback.set("keywords", keywords);
-//        } else {
-//            ObjectNode keywords = (ObjectNode) kw;
-//            if (!keywords.path("technical").isArray()) keywords.set("technical", objectMapper.createArrayNode());
-//            if (!keywords.path("soft").isArray()) keywords.set("soft", objectMapper.createArrayNode());
-//            if (!keywords.path("company").isArray()) keywords.set("company", objectMapper.createArrayNode());
-//        }
-//
-//        JsonNode voiceNode = feedback.path("voice");
-//        if (!voiceNode.isObject()) {
-//            ObjectNode voice = objectMapper.createObjectNode();
-//            voice.putNull("overallVoiceScore");
-//            voice.putNull("confidenceScore");
-//            voice.putNull("fluencyScore");
-//            voice.putNull("tremorRiskScore");
-//            voice.putArray("strengths");
-//            voice.putArray("weaknesses");
-//            feedback.set("voice", voice);
-//        } else {
-//            ObjectNode voice = (ObjectNode) voiceNode;
-//            if (!voice.has("overallVoiceScore")) voice.putNull("overallVoiceScore");
-//            if (!voice.has("confidenceScore")) voice.putNull("confidenceScore");
-//            if (!voice.has("fluencyScore")) voice.putNull("fluencyScore");
-//            if (!voice.has("tremorRiskScore")) voice.putNull("tremorRiskScore");
-//            if (!voice.path("strengths").isArray()) voice.set("strengths", objectMapper.createArrayNode());
-//            if (!voice.path("weaknesses").isArray()) voice.set("weaknesses", objectMapper.createArrayNode());
-//        }
-//    }
 
     private ArrayNode normalizeTopKeywords(JsonNode node) {
         ArrayNode out = objectMapper.createArrayNode();
@@ -594,7 +650,21 @@ public class InterviewEvaluationService {
      * 총점은 세션 result_json.questionResponses 가 아니라
      * interview_turn.feedback_json.score 평균으로 계산
      */
-    private int computeOverallFromTurnFeedbacks(List<InterviewTurn> turns) {
+    private int computeOverallScore(List<InterviewTurn> turns, int totalQuestions) {
+        double contentScore = computeContentScore(turns);
+        double voiceScore = computeVoiceScore(turns);
+        double completionScore = computeCompletionScore(turns, totalQuestions);
+
+        int overall = (int) Math.round(
+                contentScore * 0.60 +
+                        voiceScore * 0.25 +
+                        completionScore * 0.15
+        );
+
+        return clamp0_100(overall);
+    }
+
+    private int computeContentScore(List<InterviewTurn> turns) {
         int sum = 0;
         int count = 0;
 
@@ -606,8 +676,36 @@ public class InterviewEvaluationService {
                 JsonNode node = objectMapper.readTree(json);
                 int score = clamp0_100(node.path("score").asInt(0));
 
-                if (score > 0) {
-                    sum += score;
+                sum += score;
+                count++;
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (count == 0) return 0;
+        return clamp0_100((int) Math.round(sum * 1.0 / count));
+    }
+
+    private int computeVoiceScore(List<InterviewTurn> turns) {
+        int sum = 0;
+        int count = 0;
+
+        for (InterviewTurn turn : turns) {
+            try {
+                String json = turn.getAudioScoresJson();
+                if (json == null || json.isBlank()) continue;
+
+                JsonNode node = objectMapper.readTree(json);
+
+                Integer score = firstInt(
+                        node,
+                        "overall.overallVoiceScore",
+                        "overallVoiceScore",
+                        "voice.overallVoiceScore"
+                );
+
+                if (score != null) {
+                    sum += clamp0_100(score);
                     count++;
                 }
             } catch (Exception ignored) {
@@ -616,6 +714,26 @@ public class InterviewEvaluationService {
 
         if (count == 0) return 0;
         return clamp0_100((int) Math.round(sum * 1.0 / count));
+    }
+
+    private int computeCompletionScore(List<InterviewTurn> turns, int totalQuestions) {
+        if (totalQuestions <= 0) return 0;
+
+        int answered = 0;
+
+        for (InterviewTurn turn : turns) {
+            String answer = firstNonBlank(
+                    turn.getUserAnswerText(),
+                    turn.getSttText(),
+                    ""
+            ).trim();
+
+            if (!answer.isBlank()) {
+                answered++;
+            }
+        }
+
+        return clamp0_100((int) Math.round(answered * 100.0 / totalQuestions));
     }
 
     private ObjectNode emptyCompetencyBlock() {
@@ -640,5 +758,42 @@ public class InterviewEvaluationService {
         block.putNull("averageScore");
         block.putNull("previous");
         return block;
+    }
+
+    private JsonNode parseJson(String json) {
+        try {
+            if (json == null || json.isBlank()) {
+                return objectMapper.createObjectNode();
+            }
+            return objectMapper.readTree(json);
+        } catch (Exception e) {
+            return objectMapper.createObjectNode();
+        }
+    }
+
+    private Integer firstInt(JsonNode root, String... paths) {
+        if (root == null || root.isMissingNode() || root.isNull()) return null;
+
+        for (String path : paths) {
+            JsonNode cur = root;
+            boolean ok = true;
+
+            for (String part : path.split("\\.")) {
+                cur = cur.path(part);
+                if (cur.isMissingNode() || cur.isNull()) {
+                    ok = false;
+                    break;
+                }
+            }
+
+            if (ok && cur.isNumber()) {
+                return cur.asInt();
+            }
+        }
+        return null;
+    }
+
+    private int nvl(Integer v) {
+        return v == null ? 0 : v;
     }
 }
