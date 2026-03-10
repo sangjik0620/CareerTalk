@@ -16,6 +16,7 @@ public class AnalysisHistoryResponse {
     private List<Item> resume;
     private List<Item> coverLetter;
     private List<Item> portfolio;
+    private List<String> expectedQuestions;
 
     @Getter
     @Builder
@@ -30,5 +31,6 @@ public class AnalysisHistoryResponse {
         private String analyzedAt;
         private Integer score;
         private List<String> keywords;
+        private List<String> expectedQuestions;
     }
 }

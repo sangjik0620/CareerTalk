@@ -14,6 +14,8 @@ import com.careertalk.auth.jwt.JwtUtil;
 import com.careertalk.auth.repository.MemberRepository;
 import com.careertalk.file.entity.FileEntity;
 import com.careertalk.file.repository.FileRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
@@ -37,26 +39,27 @@ public class AnalysisQueryController {
     private final CIEssayRepository ciEssayRepository;
     private final FileRepository fileRepository;
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     @PostMapping("/batch-by-ids")
     public ResponseEntity<List<AnalysisEntity>> batchByIds(@RequestBody BatchByIdsRequest req) {
         if (req == null || req.getAnalysisIds() == null || req.getAnalysisIds().isEmpty()) {
             return ResponseEntity.ok(List.of());
         }
 
-        // 1 중복 제거 + null 제거
         List<Long> ids = req.getAnalysisIds().stream()
                 .filter(Objects::nonNull)
                 .distinct()
                 .toList();
 
-        if (ids.isEmpty()) return ResponseEntity.ok(List.of());
+        if (ids.isEmpty()) {
+            return ResponseEntity.ok(List.of());
+        }
 
-        // 2 조회
         List<AnalysisEntity> found = analysisRepository.findAllById(ids);
 
-        // 3 요청 순서대로 정렬해서 반환
         Map<Long, AnalysisEntity> map = found.stream()
-                .collect(Collectors.toMap(AnalysisEntity::getAnalysisId, a -> a, (a,b) -> a));
+                .collect(Collectors.toMap(AnalysisEntity::getAnalysisId, a -> a, (a, b) -> a));
 
         List<AnalysisEntity> ordered = ids.stream()
                 .map(map::get)
@@ -66,7 +69,8 @@ public class AnalysisQueryController {
         return ResponseEntity.ok(ordered);
     }
 
-    @Getter @Setter
+    @Getter
+    @Setter
     public static class BatchByIdsRequest {
         private List<Long> analysisIds;
     }
@@ -91,19 +95,28 @@ public class AnalysisQueryController {
                 item = resumeRepository.findById(a.getTargetId())
                         .map(r -> toResumeItem(a, r))
                         .orElse(null);
-                if (item != null) resume.add(item);
+
+                if (item != null) {
+                    resume.add(item);
+                }
 
             } else if ("ESSAY".equalsIgnoreCase(type)) {
                 item = ciEssayRepository.findById(a.getTargetId())
                         .map(e -> toEssayItem(a, e))
                         .orElse(null);
-                if (item != null) coverLetter.add(item);
+
+                if (item != null) {
+                    coverLetter.add(item);
+                }
 
             } else if ("PORTFOLIO".equalsIgnoreCase(type)) {
                 item = portfolioRepository.findById(a.getTargetId())
                         .map(p -> toPortfolioItem(a, p))
                         .orElse(null);
-                if (item != null) portfolio.add(item);
+
+                if (item != null) {
+                    portfolio.add(item);
+                }
             }
         }
 
@@ -122,13 +135,16 @@ public class AnalysisQueryController {
         }
 
         String token = authHeader.substring(7);
+
         if (!jwtUtil.validateToken(token)) {
             throw new RuntimeException("유효하지 않은 토큰입니다.");
         }
 
         String loginId = jwtUtil.getLoginId(token);
+
         Member member = memberRepository.findByLoginId(loginId)
                 .orElseThrow(() -> new RuntimeException("회원 정보를 찾을 수 없습니다."));
+
         return member.getUserNum();
     }
 
@@ -146,14 +162,16 @@ public class AnalysisQueryController {
                 .analyzedAt(formatDate(a.getAnalyzedAt(), a.getCreatedAt()))
                 .score(a.getOverallScore() == null ? 0 : a.getOverallScore())
                 .keywords(extractKeywords(a.getTargetJob(), a.getSummaryDetail()))
+                .expectedQuestions(extractExpectedQuestions(a.getExpectedQuestionsJson()))
                 .build();
     }
 
     private AnalysisHistoryResponse.Item toEssayItem(AnalysisEntity a, CIEssay e) {
-        String fileName = e.getFileId() == null ? "" :
-                fileRepository.findById(e.getFileId())
-                        .map(FileEntity::getOriginalName)
-                        .orElse("");
+        String fileName = e.getFileId() == null
+                ? ""
+                : fileRepository.findById(e.getFileId())
+                .map(FileEntity::getOriginalName)
+                .orElse("");
 
         return AnalysisHistoryResponse.Item.builder()
                 .id(a.getAnalysisId())
@@ -164,6 +182,7 @@ public class AnalysisQueryController {
                 .analyzedAt(formatDate(a.getAnalyzedAt(), a.getCreatedAt()))
                 .score(a.getOverallScore() == null ? 0 : a.getOverallScore())
                 .keywords(extractKeywords(a.getTargetJob(), a.getSummaryDetail()))
+                .expectedQuestions(extractExpectedQuestions(a.getExpectedQuestionsJson()))
                 .build();
     }
 
@@ -181,6 +200,7 @@ public class AnalysisQueryController {
                 .analyzedAt(formatDate(a.getAnalyzedAt(), a.getCreatedAt()))
                 .score(a.getOverallScore() == null ? 0 : a.getOverallScore())
                 .keywords(extractKeywords(a.getTargetJob(), a.getSummaryDetail()))
+                .expectedQuestions(extractExpectedQuestions(a.getExpectedQuestionsJson()))
                 .build();
     }
 
@@ -213,5 +233,29 @@ public class AnalysisQueryController {
         }
 
         return result.stream().limit(3).collect(Collectors.toList());
+    }
+
+    private List<String> extractExpectedQuestions(String expectedQuestionsJson) {
+        if (expectedQuestionsJson == null || expectedQuestionsJson.isBlank()) {
+            return List.of();
+        }
+
+        try {
+            JsonNode root = objectMapper.readTree(expectedQuestionsJson);
+            List<String> result = new ArrayList<>();
+
+            if (root.isArray()) {
+                for (JsonNode node : root) {
+                    String q = node.path("q").asText(null);
+                    if (q != null && !q.isBlank()) {
+                        result.add(q.trim());
+                    }
+                }
+            }
+
+            return result;
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 }
