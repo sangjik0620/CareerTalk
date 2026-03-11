@@ -29,7 +29,7 @@ public class PortfolioAnalysisController {
             @RequestPart("file") MultipartFile file,
             @RequestParam("jobCategory") String jobCategory,
             @RequestParam(value = "detailedPosition", required = false) String detailedPosition,
-            @RequestHeader("Authorization") String authHeader // 💡 헤더를 직접 받습니다.
+            @RequestHeader("Authorization") String authHeader
     ) {
         // 1. 토큰 추출
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -42,19 +42,17 @@ public class PortfolioAnalysisController {
         if (!jwtUtil.validateToken(token)) {
             throw new RuntimeException("유효하지 않은 토큰입니다.");
         }
-        String loginId = jwtUtil.getLoginId(token); // 💡 여기서 아이디를 꺼냅니다.
+        String loginId = jwtUtil.getLoginId(token);
 
         // 3. 추출한 아이디로 서비스 호출
         return portfolioAnalysisService.analyzeAndSave(file, jobCategory, detailedPosition, loginId);
     }
 
-    /**
-     * 분석 결과 조회 (본인 확인 로직 포함)
-     */
+    /* 분석 결과 조회 (본인 확인 로직 포함) */
     @GetMapping("/{analysisId}/result")
     public ResponseEntity<PortfolioAnalysisResponse> getPortfolioResult(
             @PathVariable("analysisId") Long analysisId,
-            @RequestHeader("Authorization") String authHeader // 💡 추가: 헤더를 직접 받음
+            @RequestHeader("Authorization") String authHeader //
     ) {
         // 1. 토큰에서 loginId 추출
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -64,7 +62,6 @@ public class PortfolioAnalysisController {
         String loginId = jwtUtil.getLoginId(token);
 
         // 2. DB에서 실제 Member의 userNum 조회
-        // (분석 때 저장한 userNum과 똑같은 번호를 가져오기 위함)
         Member member = memberRepository.findByLoginId(loginId)
                 .orElseThrow(() -> new RuntimeException("회원 정보를 찾을 수 없습니다."));
 
@@ -72,7 +69,7 @@ public class PortfolioAnalysisController {
 
         log.info("분석 결과 조회 요청 - AnalysisId: {}, UserNum: {}", analysisId, userNum);
 
-        // 3. 서비스 호출 (이제 userNum이 정확하므로 권한 에러가 안 납니다)
+        // 3. 서비스 호출
         PortfolioAnalysisResponse response = portfolioAnalysisService.getAnalysisResult(analysisId, userNum);
 
         return ResponseEntity.ok(response);
