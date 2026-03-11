@@ -26,7 +26,7 @@ public class InterviewResultService {
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
-    public InterviewResultV2Response getFullResultV2(Long sessionId) {
+    public InterviewResultV2Response getFullResultV2(Long sessionId, Long userNum) {
 
         String analysisStatus = evaluationService.getAnalysisStatus(sessionId);
         JsonNode evaluation = evaluationService.getEvaluationResultJsonOrNull(sessionId);
@@ -35,7 +35,7 @@ public class InterviewResultService {
 
         ComparisonResponse comparison = comparisonService.buildComparison(sessionId, sanitizedEvaluation);
 
-        InterviewSessionResultResponse voice = interviewService.getVoiceResult(sessionId);
+        InterviewSessionResultResponse voice = interviewService.getVoiceResult(sessionId, userNum);
 
         List<InterviewTurn> turnEntities =
                 turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);

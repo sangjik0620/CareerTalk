@@ -97,9 +97,32 @@ public class InterviewController {
     }
 
     @GetMapping("/sessions/{sessionId}/result")
-    public ResponseEntity<?> result(@PathVariable Long sessionId) {
+    public ResponseEntity<?> result(
+            @RequestHeader(value = "Authorization", required = false) String token,
+            @PathVariable Long sessionId
+    ) {
+        if (token == null || !token.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "로그인이 필요합니다."));
+        }
+
+        String loginId;
+        try {
+            loginId = jwtUtil.getLoginId(token.substring(7));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "유효하지 않은 토큰입니다."));
+        }
+
+        Member member = memberService.findByLoginId(loginId);
+        if (member == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", "사용자를 찾을 수 없습니다."));
+        }
+        Long userNum = member.getUserNum(); // ✨ 여기서 얻은 유저 번호가 핵심!
+
         String status = evaluationService.getAnalysisStatus(sessionId);
-        log.info("status : {}", status);
+        log.info("sessionId: {}, status : {}", sessionId, status);
 
         if (!"DONE".equalsIgnoreCase(status)) {
             return ResponseEntity.status(202).body(Map.of(
@@ -109,7 +132,7 @@ public class InterviewController {
             ));
         }
 
-        InterviewResultV2Response v2 = interviewResultService.getFullResultV2(sessionId);
+        InterviewResultV2Response v2 = interviewResultService.getFullResultV2(sessionId, userNum);
         return ResponseEntity.ok(v2);
     }
 
