@@ -377,7 +377,7 @@ public class InterviewEvaluationService {
         ObjectNode interview = (ObjectNode) evaluation.with("interviewAnalysis");
         JsonNode outInterview = out.path("interviewAnalysis");
 
-        interview.set("voiceCoaching", arrayOrEmpty(outInterview.path("voiceCoaching")));
+        interview.set("voiceCoaching", buildVoiceCoaching(turns));
 
         ObjectNode sttAnalysis = (ObjectNode) interview.with("sttAnalysis");
         JsonNode outStt = outInterview.path("sttAnalysis");
@@ -480,6 +480,216 @@ public class InterviewEvaluationService {
 
         log.info("[LLM MERGE] saved turn feedback_json={}/{}", savedCount, turns.size());
     }
+
+    private ArrayNode buildVoiceCoaching(List<InterviewTurn> turns) {
+        ArrayNode out = objectMapper.createArrayNode();
+
+        VoiceMetricAggregate agg = aggregateVoiceMetrics(turns);
+        if (agg == null) {
+            out.add("음성 분석 데이터가 충분하지 않아 코칭을 생성할 수 없습니다.");
+            return out;
+        }
+
+        if (agg.confidenceScore != null && agg.confidenceScore < 60) {
+            out.add("자신감 점수가 낮은 편입니다. 문장 첫머리를 또렷하게 시작하고 끝맺음을 분명하게 해보세요.");
+        }
+
+        if (agg.fluencyScore != null && agg.fluencyScore < 60) {
+            out.add("유창성이 다소 낮습니다. 답변 전에 핵심 키워드를 먼저 정리한 뒤 한 문장씩 끊어서 말해보세요.");
+        }
+
+        if (agg.tremorRiskScore != null && agg.tremorRiskScore >= 45) {
+            out.add("목소리 떨림이 감지됩니다. 답변 시작 전에 호흡을 한 번 정리하고 초반 속도를 약간 늦추는 것이 좋습니다.");
+        }
+
+        if (agg.speakingRate != null && agg.speakingRate < 110) {
+            out.add("말속도가 다소 느립니다. 핵심 문장은 유지하되 불필요한 머뭇거림을 줄여 템포를 조금만 올려보세요.");
+        } else if (agg.speakingRate != null && agg.speakingRate > 180) {
+            out.add("말속도가 빠른 편입니다. 중요한 경험이나 성과를 설명할 때는 속도를 한 단계 낮추면 전달력이 좋아집니다.");
+        }
+
+        if (agg.pauseRatio != null && agg.pauseRatio >= 0.35) {
+            out.add("침묵 비율이 높은 편입니다. 답변 구조를 서론-핵심-결론으로 미리 정리하면 멈춤 구간을 줄일 수 있습니다.");
+        }
+
+        if (agg.pitchStability != null && agg.pitchStability < 60) {
+            out.add("음정 안정성이 낮은 편입니다. 한 문장을 끝까지 같은 호흡으로 유지하는 연습을 하면 더 차분하게 들립니다.");
+        }
+
+        if (out.isEmpty()) {
+            out.add("전반적으로 안정적인 음성 전달입니다. 지금 톤을 유지하면서 핵심 경험을 조금 더 또렷하게 강조하면 좋습니다.");
+            out.add("현재 말속도와 유창성의 균형이 나쁘지 않습니다. 중요한 문장에서만 강세를 주면 전달력이 더 좋아집니다.");
+        }
+
+        while (out.size() > 4) {
+            out.remove(out.size() - 1);
+        }
+
+        return out;
+    }
+
+    private VoiceMetricAggregate aggregateVoiceMetrics(List<InterviewTurn> turns) {
+        if (turns == null || turns.isEmpty()) return null;
+
+        double confidenceSum = 0;
+        int confidenceCount = 0;
+
+        double fluencySum = 0;
+        int fluencyCount = 0;
+
+        double tremorSum = 0;
+        int tremorCount = 0;
+
+        double speakingRateSum = 0;
+        int speakingRateCount = 0;
+
+        double pauseRatioSum = 0;
+        int pauseRatioCount = 0;
+
+        double pitchStabilitySum = 0;
+        int pitchStabilityCount = 0;
+
+        for (InterviewTurn turn : turns) {
+            JsonNode scoreRoot = parseJson(turn.getAudioScoresJson());
+            JsonNode audioRoot = parseJson(turn.getAudioMetricsJson());
+            JsonNode pythonRoot = parseJson(turn.getPythonMetricsJson());
+
+            Integer confidenceScore = firstInt(
+                    scoreRoot,
+                    "confidence.confidenceScore",
+                    "confidenceScore",
+                    "voice.confidenceScore"
+            );
+            if (confidenceScore != null) {
+                confidenceSum += clamp0_100(confidenceScore);
+                confidenceCount++;
+            }
+
+            Integer fluencyScore = firstInt(
+                    scoreRoot,
+                    "fluency.fluencyScore",
+                    "fluencyScore",
+                    "voice.fluencyScore"
+            );
+            if (fluencyScore != null) {
+                fluencySum += clamp0_100(fluencyScore);
+                fluencyCount++;
+            }
+
+            Integer tremorRiskScore = firstInt(
+                    scoreRoot,
+                    "tremor.tremorRiskScore",
+                    "tremorRiskScore",
+                    "voice.tremorRiskScore"
+            );
+            if (tremorRiskScore != null) {
+                tremorSum += clamp0_100(tremorRiskScore);
+                tremorCount++;
+            }
+
+            Double speechRateWps = firstDouble(
+                    audioRoot,
+                    "speechRateWps",
+                    "voice.speechRateWps"
+            );
+            if (speechRateWps != null) {
+                speakingRateSum += Math.round(speechRateWps * 60.0);
+                speakingRateCount++;
+            }
+
+            Double pauseRatio = firstDouble(
+                    audioRoot,
+                    "silenceRatio",
+                    "voice.silenceRatio"
+            );
+            if (pauseRatio != null) {
+                pauseRatio = Math.max(0.0, Math.min(1.0, pauseRatio));
+                pauseRatioSum += pauseRatio;
+                pauseRatioCount++;
+            }
+
+            Double cStability = firstDouble(
+                    scoreRoot,
+                    "confidence.components.cStability"
+            );
+
+            if (cStability == null) {
+                Double pitchCv = firstDouble(
+                        pythonRoot,
+                        "extracted.pitchCv",
+                        "raw.pitch.pitchCv",
+                        "pitchCv"
+                );
+                if (pitchCv != null) {
+                    cStability = 1.0 - Math.max(0.0, Math.min(1.0, pitchCv / 0.25));
+                }
+            }
+
+            if (cStability != null) {
+                pitchStabilitySum += clamp0_100((int) Math.round(cStability * 100.0));
+                pitchStabilityCount++;
+            }
+        }
+
+        if (confidenceCount == 0
+                && fluencyCount == 0
+                && tremorCount == 0
+                && speakingRateCount == 0
+                && pauseRatioCount == 0
+                && pitchStabilityCount == 0) {
+            return null;
+        }
+
+        return new VoiceMetricAggregate(
+                confidenceCount == 0 ? null : clamp0_100((int) Math.round(confidenceSum / confidenceCount)),
+                fluencyCount == 0 ? null : clamp0_100((int) Math.round(fluencySum / fluencyCount)),
+                tremorCount == 0 ? null : clamp0_100((int) Math.round(tremorSum / tremorCount)),
+                speakingRateCount == 0 ? null : (int) Math.round(speakingRateSum / speakingRateCount),
+                pauseRatioCount == 0 ? null : Math.round((pauseRatioSum / pauseRatioCount) * 1000.0) / 1000.0,
+                pitchStabilityCount == 0 ? null : clamp0_100((int) Math.round(pitchStabilitySum / pitchStabilityCount))
+        );
+    }
+
+    private Double firstDouble(JsonNode root, String... paths) {
+        if (root == null || root.isMissingNode() || root.isNull()) return null;
+
+        for (String path : paths) {
+            JsonNode cur = root;
+            boolean ok = true;
+
+            for (String part : path.split("\\.")) {
+                cur = cur.path(part);
+                if (cur.isMissingNode() || cur.isNull()) {
+                    ok = false;
+                    break;
+                }
+            }
+
+            if (!ok) continue;
+
+            if (cur.isNumber()) {
+                return cur.asDouble();
+            }
+
+            if (cur.isTextual()) {
+                try {
+                    return Double.parseDouble(cur.asText());
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private record VoiceMetricAggregate(
+            Integer confidenceScore,
+            Integer fluencyScore,
+            Integer tremorRiskScore,
+            Integer speakingRate,
+            Double pauseRatio,
+            Integer pitchStability
+    ) {}
 
     private ArrayNode normalizeTopKeywords(JsonNode node) {
         ArrayNode out = objectMapper.createArrayNode();

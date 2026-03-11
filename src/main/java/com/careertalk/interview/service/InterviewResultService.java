@@ -58,6 +58,8 @@ public class InterviewResultService {
             Map<String, Object> pythonExtracted = parseJsonToMap(t.getPythonMetricsJson());
 
             InterviewResultV2Response.Scores scores = extractScoresSummary(t.getAudioScoresJson());
+            InterviewResultV2Response.VoiceMetrics voiceMetrics =
+                    buildVoiceMetrics(audioMetrics, pythonExtracted, scores);
             InterviewResultV2Response.Feedback feedback = extractFeedbackSummary(t.getFeedbackJson());
 
             InterviewResultV2Response.Audio audio =
@@ -83,6 +85,7 @@ public class InterviewResultService {
                             audio,
                             metrics,
                             scores,
+                            voiceMetrics,
                             feedback
                     );
 
@@ -119,11 +122,112 @@ public class InterviewResultService {
         try {
             return objectMapper.readValue(
                     json,
-                    new TypeReference<Map<String, Object>>() {}
+                    new TypeReference<Map<String, Object>>() {
+                    }
             );
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private InterviewResultV2Response.VoiceMetrics buildVoiceMetrics(
+            Map<String, Object> audioMetrics,
+            Map<String, Object> pythonExtracted,
+            InterviewResultV2Response.Scores scores
+    ) {
+        Integer confidenceScore = (scores != null) ? scores.confidenceScore() : null;
+        Integer fluencyScore = (scores != null) ? scores.fluencyScore() : null;
+        Integer tremorRiskScore = (scores != null) ? scores.tremorRiskScore() : null;
+
+        Double speechRateWps = getNestedDouble(audioMetrics, "speechRateWps");
+        Integer speakingRate = (speechRateWps != null)
+                ? (int) Math.round(speechRateWps * 60.0)
+                : null;
+
+        Double pauseRatio = getNestedDouble(audioMetrics, "silenceRatio");
+        if (pauseRatio != null) {
+            pauseRatio = Math.max(0.0, Math.min(1.0, pauseRatio));
+            pauseRatio = Math.round(pauseRatio * 1000.0) / 1000.0;
+        }
+
+        Double cStability = null;
+        if (scores != null && scores.raw() != null) {
+            cStability = getNestedDouble(scores.raw(), "confidence.components.cStability");
+        }
+
+        if (cStability == null) {
+            Double pitchCv = firstNonNull(
+                    getNestedDouble(pythonExtracted, "extracted.pitchCv"),
+                    getNestedDouble(pythonExtracted, "raw.pitch.pitchCv"),
+                    getNestedDouble(pythonExtracted, "pitchCv")
+            );
+
+            if (pitchCv != null) {
+                cStability = 1.0 - Math.max(0.0, Math.min(1.0, pitchCv / 0.25));
+            }
+        }
+
+        Integer pitchStability = (cStability != null)
+                ? clampInt((int) Math.round(cStability * 100.0), 0, 100)
+                : null;
+
+        if (confidenceScore == null
+                && fluencyScore == null
+                && tremorRiskScore == null
+                && speakingRate == null
+                && pauseRatio == null
+                && pitchStability == null) {
+            return null;
+        }
+
+        return new InterviewResultV2Response.VoiceMetrics(
+                confidenceScore,
+                fluencyScore,
+                tremorRiskScore,
+                speakingRate,
+                pauseRatio,
+                pitchStability
+        );
+    }
+
+    private Double getNestedDouble(Map<String, Object> source, String path) {
+        if (source == null || path == null || path.isBlank()) return null;
+
+        Object current = source;
+
+        for (String key : path.split("\\.")) {
+            if (!(current instanceof Map<?, ?> currentMap)) {
+                return null;
+            }
+            current = currentMap.get(key);
+            if (current == null) return null;
+        }
+
+        if (current instanceof Number n) {
+            return n.doubleValue();
+        }
+
+        if (current instanceof String s) {
+            try {
+                return Double.parseDouble(s);
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    private Double firstNonNull(Double... values) {
+        if (values == null) return null;
+        for (Double v : values) {
+            if (v != null) return v;
+        }
+        return null;
+    }
+
+    private int clampInt(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private InterviewResultV2Response.Feedback extractFeedbackSummary(String json) {
@@ -256,7 +360,8 @@ public class InterviewResultService {
             Map<String, Object> raw =
                     objectMapper.convertValue(
                             root,
-                            new TypeReference<Map<String, Object>>() {}
+                            new TypeReference<Map<String, Object>>() {
+                            }
                     );
 
             return new InterviewResultV2Response.Scores(
