@@ -27,7 +27,7 @@ public class ResumeAnalysisController {
     private final MemberRepository memberRepository;
     private final JwtUtil jwtUtil;
 
-    // 헬퍼 메서드 추가 (팀원 방식과 동일한 패턴)
+    // 헬퍼 메서드 추가 (과거 jwt필터 없을시 사용)
 //    private Long extractUserNum(String authHeader) {
 //        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
 //            throw new RuntimeException("인증 정보가 없습니다.");
@@ -69,48 +69,22 @@ public class ResumeAnalysisController {
             @RequestParam("detailedPosition") String detailedPosition
 //            @RequestHeader("Authorization") String authHeader
     ) {
-//        Long currentUserId = 1L; //
         Long currentUserId = getCurrentUserId();  // 1L 대체
         ResumeAnalysisResponse response = resumeService.analyzeAndSave(file, jobCategory, detailedPosition, currentUserId);
         return ResponseEntity.ok(response);
     }
 
     /**
-     * ⭐ 추가: 분석 결과 조회 (Portfolio와 동일한 패턴)
+     * ⭐ 추가: 분석 결과 조회
      * GET /api/resumes/{analysisId}/result
      */
     @GetMapping("/{analysisId}/result")
     public ResponseEntity<ResumeAnalysisResponse> getResumeResult(
             @PathVariable("analysisId") Long analysisId
-//            @RequestHeader("Authorization") String authHeader
     ) {
         Long currentUserNum = getCurrentUserId();
         ResumeAnalysisResponse response = resumeService.getAnalysisResult(analysisId, currentUserNum);
-//        ResumeAnalysisResponse response = resumeService.getAnalysisResult(analysisId);
         return ResponseEntity.ok(response);
     }
 
-    /**
-     * resumes(resumeId) -> files(fileId) -> S3 -> DOCX 파싱 텍스트 반환
-     * GET /api/resumes/{resumeId}/parsed-text
-     */
-    @GetMapping("/{resumeId}/parsed-text")
-    public ResponseEntity<Map<String, Object>> parsedTextByResumeId(@PathVariable Long resumeId
-//                                                                    @RequestHeader("Authorization") String authHeader
-    ) {
-        Long currentUserId = getCurrentUserId();
-        return ResponseEntity.ok(resumeService.parseResumeTextByResumeId(resumeId, currentUserId));
-    }
-
-    /**
-     * files(fileId) -> S3 -> DOCX 파싱 텍스트 반환
-     * GET /api/resumes/files/{fileId}/parsed-text
-     */
-    @GetMapping("/files/{fileId}/parsed-text")
-    public ResponseEntity<Map<String, Object>> parsedTextByFileId(@PathVariable Long fileId
-//                                                                  @RequestHeader("Authorization") String authHeader
-    ) {
-        Long currentUserId = getCurrentUserId();
-        return ResponseEntity.ok(resumeService.parseResumeTextByFileId(fileId, currentUserId));
-    }
 }
