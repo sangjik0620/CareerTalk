@@ -94,7 +94,7 @@ public class ResumeService {
         try {
             s3Key = s3Service.uploadFile(file, currentUserId);
         } catch (Exception e) {
-            throw new RuntimeException("S3 파일 업로드에 실패했습니다.", e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "S3 파일 업로드에 실패했습니다.", e);
         }
 
         // 3. FileEntity 저장
@@ -117,7 +117,7 @@ public class ResumeService {
             fileId = fileRepository.save(fileEntity).getFileId();
         } catch (Exception e) {
             log.error("FileEntity 저장 실패", e);
-            throw new RuntimeException("파일 정보 저장 중 오류가 발생했습니다.");
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "파일 정보 저장 중 오류가 발생했습니다.");
         }
 
         // 4. DOCX 텍스트 파싱 (S3에서 바로 스트림)
@@ -126,7 +126,7 @@ public class ResumeService {
             extractedText = docxParsingUtill.parseDocx(in);
         } catch (Exception e) {
             log.error("DOCX 파싱 실패: s3Key={}", s3Key, e);
-            throw new RuntimeException("DOCX 파싱 중 오류가 발생했습니다.");
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "DOCX 파싱 중 오류가 발생했습니다.");
         }
 
         // 5. ResumeEntity 저장
@@ -185,7 +185,7 @@ public class ResumeService {
             return convertToResponseDto(analysis, null);
         } catch (JsonProcessingException e) {
             log.error("JSON 파싱 에러", e);
-            throw new RuntimeException("분석 결과를 불러오는 중 오류가 발생했습니다.");
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "분석 결과를 불러오는 중 오류가 발생했습니다.");
         }
     }
 
@@ -248,7 +248,7 @@ public class ResumeService {
             return StreamUtils.copyToString(systemPromptResource.getInputStream(), StandardCharsets.UTF_8);
         } catch (Exception e) {
             log.error("프롬프트 파일 읽기 실패", e);
-            throw new RuntimeException("서버 설정 오류로 분석을 시작할 수 없습니다.");
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "서버 설정 오류로 분석을 시작할 수 없습니다.");
         }
     }
 
@@ -307,7 +307,7 @@ public class ResumeService {
 
         } catch (Exception e) {
             log.error("AI 응답 결과 처리 중 에러 발생", e);
-            throw new RuntimeException("분석 결과를 저장하는 중 오류가 발생했습니다.");
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "분석 결과를 저장하는 중 오류가 발생했습니다.");
         }
     }
 
