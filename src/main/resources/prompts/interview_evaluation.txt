@@ -226,10 +226,6 @@ improvements
 
 ──────────────── interviewAnalysis 생성 규칙 ────────────────
 
-voiceCoaching
-- 2~4개
-- 음성 전달 개선 팁
-
 keywordUsage 계산
 
 technical

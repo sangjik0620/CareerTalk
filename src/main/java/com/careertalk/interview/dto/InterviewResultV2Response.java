@@ -23,6 +23,7 @@ public record InterviewResultV2Response(
             Audio audio,
             Metrics metrics,
             Scores scores,
+            VoiceMetrics voiceMetrics,
             Feedback feedback
     ) {}
 
@@ -46,6 +47,15 @@ public record InterviewResultV2Response(
             Double overallReliability,
             List<String> flags,
             Map<String, Object> raw
+    ) {}
+
+    public record VoiceMetrics(
+            Integer confidenceScore,
+            Integer fluencyScore,
+            Integer tremorRiskScore,
+            Integer speakingRate,
+            Double pauseRatio,
+            Integer pitchStability
     ) {}
 
     public record Feedback(
