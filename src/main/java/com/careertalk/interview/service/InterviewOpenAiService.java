@@ -80,7 +80,7 @@ public class InterviewOpenAiService {
             throw new IllegalStateException("serialize request failed", e);
         }
 
-        // ✅ 핵심 로그: 호출 여부/중복 여부 확인용
+        // 호출 여부/중복 여부 확인용
         log.info("[LLM] OpenAI request start. model={}, url={}, payloadBytes={}",
                 model, apiUrl, reqJson.getBytes(StandardCharsets.UTF_8).length);
 

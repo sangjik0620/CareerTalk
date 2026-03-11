@@ -67,33 +67,6 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
             @Param("errorMessage") String errorMessage
     );
 
-    // 직전(이전) 점수: 같은 userId의 현재 session created_at 이전 중 최신 1개
-    @Query(value = """
-            SELECT ie.overall_score
-            FROM interview_sessions s
-            JOIN interview_evaluations ie ON ie.session_id = s.session_id
-            WHERE s.user_num = :userNum
-              AND ie.analysis_status = 'DONE'
-              AND ie.overall_score IS NOT NULL
-              AND s.created_at < :createdAt
-            ORDER BY s.created_at DESC
-            LIMIT 1
-            """, nativeQuery = true)
-    Integer findPrevOverallScore(
-            @Param("userNum") Long userNum,
-            @Param("createdAt") java.time.LocalDateTime createdAt
-    );
-
-    // 전체 평균 점수: DONE 평가 평균 (현재 세션은 제외)
-    @Query(value = """
-            SELECT AVG(overall_score)
-            FROM interview_evaluations
-            WHERE analysis_status = 'DONE'
-              AND overall_score IS NOT NULL
-              AND session_id <> :sessionId
-            """, nativeQuery = true)
-    Double findGlobalAverageScoreExcludingSession(@Param("sessionId") Long sessionId);
-
     @Query(value = """
             SELECT
               CASE
@@ -112,18 +85,6 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
             @Param("sessionId") Long sessionId,
             @Param("overallScore") Integer overallScore
     );
-
-    @Query(value = """
-            SELECT DATE_FORMAT(s.created_at, '%m-%d') AS label, e.overall_score AS score
-            FROM interview_sessions s
-            JOIN interview_evaluations e ON e.session_id = s.session_id
-            WHERE s.user_num = :userNum
-              AND e.analysis_status = 'DONE'
-              AND e.overall_score IS NOT NULL
-            ORDER BY s.created_at DESC
-            LIMIT :limit
-            """, nativeQuery = true)
-    java.util.List<Object[]> findRecentScoreHistory(@Param("userNum") Long userNum, @Param("limit") int limit);
 
     @Query(value = """
             SELECT e.result_json
