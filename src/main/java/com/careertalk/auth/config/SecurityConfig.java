@@ -58,6 +58,10 @@ public class SecurityConfig {
 
                         // 결제 준비는 로그인 사용자만
                         .requestMatchers("/api/payments/kakao/ready").authenticated()
+
+                        // 이력서 분석은 로그인 사용자만
+                        .requestMatchers("/api/resumes/**").authenticated()
+
                         .requestMatchers("/api/portfolios/**").authenticated()
                         .anyRequest().permitAll()
                 )
