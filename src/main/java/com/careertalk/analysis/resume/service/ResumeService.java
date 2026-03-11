@@ -304,7 +304,9 @@ public class ResumeService {
 
             AnalysisEntity saved = analysisRepository.save(analysis);
             return convertToResponseDto(saved, detailedPosition);
-
+        } catch (ResponseStatusException e) {
+            // 의도적으로 던진 예외(이용권 없음, 정합성 오류 등)는 그대로 전파
+            throw e;
         } catch (Exception e) {
             log.error("AI 응답 결과 처리 중 에러 발생", e);
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "분석 결과를 저장하는 중 오류가 발생했습니다.");
