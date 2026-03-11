@@ -216,13 +216,26 @@ public class PortfolioAnalysisService {
     }
 
     private PortfolioAnalysisResponse convertToResponseDto(AnalysisEntity analysis, String nickname) throws JsonProcessingException {
-        List<QuestionDto> questionList = objectMapper.readValue(
-                analysis.getExpectedQuestionsJson(), new TypeReference<>() {}
-        );
-        Map<String, Integer> scoreMap = objectMapper.readValue(
-                analysis.getScoreJson(), new TypeReference<>() {}
-        );
 
+        // 1. 예상 질문 리스트 처리 (Null 방어)
+        List<QuestionDto> questionList;
+        String questionsJson = analysis.getExpectedQuestionsJson();
+        if (questionsJson != null && !questionsJson.isBlank() && !questionsJson.equals("null")) {
+            questionList = objectMapper.readValue(questionsJson, new TypeReference<>() {});
+        } else {
+            questionList = List.of(); // null이면 빈 리스트로 초기화
+        }
+
+        // 2. 점수 데이터 처리 (Null 방어)
+        Map<String, Integer> scoreMap;
+        String scoreJson = analysis.getScoreJson();
+        if (scoreJson != null && !scoreJson.isBlank() && !scoreJson.equals("null")) {
+            scoreMap = objectMapper.readValue(scoreJson, new TypeReference<>() {});
+        } else {
+            scoreMap = Map.of(); // null이면 빈 맵으로 초기화
+        }
+
+        // 3. 차트 데이터 변환 (scoreMap이 비어있어도 에러 없이 빈 리스트가 생성됨)
         List<ChartDataDto> chartDataList = scoreMap.entrySet().stream()
                 .map(entry -> ChartDataDto.builder()
                         .subject(entry.getKey())
@@ -231,13 +244,14 @@ public class PortfolioAnalysisService {
                         .build())
                 .collect(Collectors.toList());
 
+        // 4. 최종 객체 생성 (모든 필드에 대해 null 체크 적용)
         return PortfolioAnalysisResponse.builder()
                 .analysisId(analysis.getAnalysisId())
                 .portfolioId(analysis.getTargetId())
-                .targetJob(analysis.getTargetJob())
+                .targetJob(analysis.getTargetJob() != null ? analysis.getTargetJob() : "미설정 직무")
                 .overallScore(analysis.getOverallScore())
-                .oneLineReview(analysis.getOneLineReview())
-                .summaryDetail(analysis.getSummaryDetail())
+                .oneLineReview(analysis.getOneLineReview() != null ? analysis.getOneLineReview() : "분석 총평이 없습니다.")
+                .summaryDetail(analysis.getSummaryDetail() != null ? analysis.getSummaryDetail() : "상세 분석 내용이 없습니다.")
                 .chartData(chartDataList)
                 .questions(questionList)
                 .nickname(nickname)
