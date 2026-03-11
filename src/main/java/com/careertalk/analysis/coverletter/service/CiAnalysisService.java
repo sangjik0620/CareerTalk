@@ -46,7 +46,6 @@ public class CiAnalysisService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AnalysisRepository analysisRepository;
     private final CiFileDocumentRepository ciFileDocumentRepository; // 제목 찾기용
-    private final ObjectMapper objectMapper;
     private final CIEssayRepository ciEssayRepository;
     private final CiAnalysisRepository ciAnalysisRepository;
     private final MemberService memberService;

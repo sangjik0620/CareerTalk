@@ -1,9 +1,6 @@
 package com.careertalk.analysis.coverletter.controller;
 
-import com.careertalk.analysis.coverletter.dto.CIAnalyzeFormRequest;
-import com.careertalk.analysis.coverletter.dto.CIAnalyzeResponse;
-import com.careertalk.analysis.coverletter.dto.CiRewriteRequest;
-import com.careertalk.analysis.coverletter.dto.CiRewriteResponse;
+import com.careertalk.analysis.coverletter.dto.*;
 import com.careertalk.analysis.coverletter.service.CiAnalysisService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
