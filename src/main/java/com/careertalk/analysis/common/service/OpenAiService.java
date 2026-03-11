@@ -82,7 +82,7 @@ public class OpenAiService {
             throw new RuntimeException("AI 분석 서비스 통신 실패", e);
         }
     }
-        // 챗봇
+    // 챗봇
     public String getChatbotResponse(String systemPrompt, String userMessage) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -111,7 +111,7 @@ public class OpenAiService {
             );
 
             Map<String, Object> responseBody = response.getBody();
-            log.info("전체 응답 바디: {}", responseBody); // 여기에 데이터가 찍히는지 꼭 확인하세요!
+            log.info("전체 응답 바디: {}", responseBody);
 
             if (responseBody != null && responseBody.containsKey("choices")) {
                 List<Map<String, Object>> choices = (List<Map<String, Object>>) responseBody.get("choices");
@@ -120,7 +120,6 @@ public class OpenAiService {
                     Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
                     String aiContent = (String) message.get("content");
 
-                    // 만약 aiContent가 null이면 강제로 메시지 할당
                     if (aiContent == null || aiContent.trim().isEmpty()) {
                         return "AI가 대답을 생성했지만 내용이 비어있습니다. 프롬프트를 확인해주세요.";
                     }

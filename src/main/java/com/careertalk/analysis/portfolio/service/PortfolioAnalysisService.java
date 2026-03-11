@@ -70,7 +70,7 @@ public class PortfolioAnalysisService {
         Member member = memberRepository.findByLoginId(loginId)
                 .orElseThrow(() -> new RuntimeException("해당 아이디의 회원을 찾을 수 없습니다: " + loginId));
         Long userNum = member.getUserNum();
-        String nickname = member.getNickname(); // 💡 닉네임 미리 확보
+        String nickname = member.getNickname();
 
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || !originalFilename.toLowerCase().endsWith(".pdf")) {
@@ -189,7 +189,6 @@ public class PortfolioAnalysisService {
         }
     }
 
-    // 💡 핵심 수정: 파라미터에 nickname 추가
     private PortfolioAnalysisResponse convertToResponseDto(AnalysisEntity analysis, String nickname) throws JsonProcessingException {
         List<QuestionDto> questionList = objectMapper.readValue(
                 analysis.getExpectedQuestionsJson(), new TypeReference<>() {}
@@ -215,7 +214,7 @@ public class PortfolioAnalysisService {
                 .summaryDetail(analysis.getSummaryDetail())
                 .chartData(chartDataList)
                 .questions(questionList)
-                .nickname(nickname) // 💡 전달받은 nickname 세팅
+                .nickname(nickname)
                 .build();
     }
 }
