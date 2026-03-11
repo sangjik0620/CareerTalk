@@ -153,6 +153,10 @@ public class CiAnalysisService {
             scoreMap.put("llmScore", llmScore);
             scoreMap.put("totalScore", totalScore);
 
+            scoreMap.put("strengths", strengths);
+            scoreMap.put("weaknesses", weaknesses);
+            scoreMap.put("feedback", feedback);
+
             Map<String, Object> ruleResultMap = new LinkedHashMap<>();
             ruleResultMap.put("paragraphs", countParagraphs(finalContent));
             ruleResultMap.put("numbers", countNumbers(finalContent));
