@@ -23,9 +23,7 @@ public class PortfolioAnalysisResponse {
 
     private List<QuestionDto> questions;
 
-    /*
-      레이더 차트용 데이터
-     */
+    /* 레이더 차트용 데이터 */
     @Getter
     @Builder
     @NoArgsConstructor
@@ -36,9 +34,7 @@ public class PortfolioAnalysisResponse {
         private int fullMark;    // 만점 기준 (보통 100)
     }
 
-    /*
-      예상 면접 질문 및 질문 의도
-     */
+    /* 예상 면접 질문 및 질문 의도 */
     @Getter
     @Builder
     @NoArgsConstructor
