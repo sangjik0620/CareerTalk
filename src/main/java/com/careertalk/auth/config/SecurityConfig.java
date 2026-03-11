@@ -62,6 +62,7 @@ public class SecurityConfig {
                         // 이력서 분석은 로그인 사용자만
                         .requestMatchers("/api/resumes/**").authenticated()
 
+                        .requestMatchers("/api/portfolios/**").authenticated()
                         .anyRequest().permitAll()
                 )
                 .formLogin(form -> form.disable())
