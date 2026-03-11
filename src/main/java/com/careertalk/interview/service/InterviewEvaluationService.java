@@ -86,11 +86,6 @@ public class InterviewEvaluationService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markProcessing(Long sessionId) {
-        evaluationRepository.updateAnalysisStatus(sessionId, "PROCESSING", null);
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markDone(Long sessionId) {
         evaluationRepository.updateAnalysisStatus(sessionId, "DONE", null);
     }
