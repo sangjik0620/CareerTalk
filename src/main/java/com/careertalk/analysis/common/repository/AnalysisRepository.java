@@ -18,4 +18,5 @@ public interface AnalysisRepository extends JpaRepository<AnalysisEntity, Long> 
 
     List<AnalysisEntity> findAllByUserNumOrderByAnalyzedAtDesc(Long userNum);
 
+    List<AnalysisEntity> findByUserNumOrderByCreatedAtDesc(Long userNum);
 }

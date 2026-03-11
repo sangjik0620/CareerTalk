@@ -1,13 +1,17 @@
 package com.careertalk.analysis.coverletter.dto;
 
+import lombok.AllArgsConstructor;
 import lombok.Builder;
-import lombok.Getter;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.util.List;
 
-@Getter
+@Data
 @Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class CiRewriteResponse {
-    private String rewrittenEssay;     // 개선본 본문
-    private List<String> changeSummary; // 변경 요약(3~6개 추천)
+    private String rewrittenEssay;
+    private List<String> changeSummary;
 }

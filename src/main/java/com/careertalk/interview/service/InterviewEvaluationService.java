@@ -11,17 +11,20 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.Resource;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -31,18 +34,17 @@ public class InterviewEvaluationService {
     private final InterviewSessionRepository sessionRepository;
     private final InterviewTurnRepository turnRepository;
     private final InterviewEvaluationRepository evaluationRepository;
-    private final InterviewOpenAiService interviewOpenAiService; // ✅ 인터뷰 전용 1회 호출 서비스
+    private final InterviewOpenAiService interviewOpenAiService;
     private final ObjectMapper objectMapper;
 
     @Value("classpath:prompts/interview_evaluation.txt")
     private Resource interviewEvalSystemPrompt;
 
     /**
-     * ✅ 분석 파이프라인 (유일한 생성 지점)
-     * - 세션/턴 로드
-     * - 서버는 "수치/구조"만 생성
-     * - LLM 1회 호출로 "텍스트/액션/키워드/보이스 코칭" 생성
-     * - DB upsert(result_json)
+     * 세션 종합 분석
+     * - LLM은 1회만 호출
+     * - LLM 응답의 questionResponses는 interview_turn.feedback_json 으로 분리 저장
+     * - result_json 에는 세션 종합 정보만 저장
      */
     public void runAnalysisInternal(Long sessionId) throws Exception {
         InterviewSession session = sessionRepository.findById(sessionId)
@@ -50,20 +52,24 @@ public class InterviewEvaluationService {
 
         List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
 
-        // 1) 서버 기본 구조 생성
+        // 1) 서버 기본 구조 생성 (세션 종합 결과만)
         ObjectNode evaluation = buildEvaluationSkeleton(session, turns);
 
-        // 2) LLM 결과 merge (트랜잭션 밖)
+        // 2) LLM 결과 merge + turn.feedback_json 저장
         applyLlmInsights(evaluation, session, turns);
 
-        // 3) 총점 계산
+        // 3) 총점 계산: 이제 turn.feedback_json 의 score 평균으로 계산
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
-        JsonNode questionResponses = evaluation.path("interviewAnalysis").path("questionResponses");
+        ObjectNode comparison = (ObjectNode) evaluation.with("comparison");
 
-        int overall = computeOverallFromQuestionResponses(questionResponses);
+        int overall = computeOverallScore(turns, turns.size());
+        int percentileRank = calculatePercentile(overall, session.getSessionId());
+
         summary.put("overallScore", overall);
+        summary.put("percentileRank", percentileRank);
+        comparison.put("percentileRank", percentileRank);
 
-        // 4) DB 저장만 별도 트랜잭션
+        // 4) 세션 result_json 저장
         saveEvaluationResult(sessionId, overall, evaluation);
     }
 
@@ -78,10 +84,6 @@ public class InterviewEvaluationService {
 
         evaluationRepository.upsert(sessionId, overall, strengths, weaknesses, nextActions, jsonStr);
     }
-
-    // ─────────────────────────────────────────────────────────────
-    // Status helpers (Worker/Controller에서 사용)
-    // ─────────────────────────────────────────────────────────────
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markProcessing(Long sessionId) {
@@ -113,17 +115,17 @@ public class InterviewEvaluationService {
     public String getAnalysisStatus(Long sessionId) {
         String status = evaluationRepository.findAnalysisStatusBySessionId(sessionId);
         if (status == null || status.isBlank()) {
-            System.out.println("[STATUS] no evaluation row for sessionId=" + sessionId);
+//            System.out.println("[STATUS] no evaluation row for sessionId=" + sessionId);
             return "PENDING";
         }
-        System.out.println("[STATUS] sessionId=" + sessionId + ", status=" + status);
+//        System.out.println("[STATUS] sessionId=" + sessionId + ", status=" + status);
         return status;
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // 1) 서버 계산: "구조/수치"만 만들고 텍스트는 비움 (LLM이 채움)
-    // ─────────────────────────────────────────────────────────────
-
+    /**
+     * result_json skeleton 생성
+     * - questionResponses 는 더 이상 session result_json 에 넣지 않음
+     */
     private ObjectNode buildEvaluationSkeleton(InterviewSession session, List<InterviewTurn> turns) {
         ObjectNode root = objectMapper.createObjectNode();
 
@@ -136,13 +138,10 @@ public class InterviewEvaluationService {
         }
         info.put("duration", formatDuration(session.getStartedAt(), session.getEndedAt()));
 
-        // position: 현재 DB 컬럼 없어서 title로 유지(기존 코드 호환)
         String position = safe(session.getTitle()).trim();
-        if (!position.isBlank()) info.put("position", position);
-
-        // interviewAnalysis
-        ObjectNode interview = root.putObject("interviewAnalysis");
-        ArrayNode qArr = interview.putArray("questionResponses");
+        if (!position.isBlank()) {
+            info.put("position", position);
+        }
 
         int answered = 0;
         int total = turns.size();
@@ -161,29 +160,35 @@ public class InterviewEvaluationService {
                 totalRespSec += dur;
                 respSecCount++;
             }
-
-            ObjectNode one = qArr.addObject();
-            one.put("turnNo", safeInt(t.getTurnNo(), 0));
-            one.put("question", safe(t.getAiQuestion()));
-            one.put("answer", answer);
-
-            // LLM merge 전 기본값
-            one.putNull("score");
-            one.put("oneLineFeedback", "");
-            one.put("fullFeedback", "");
         }
+
+        int avgRespSec = respSecCount == 0 ? 0 : (int) Math.round(totalRespSec * 1.0 / respSecCount);
+
+        // interviewAnalysis
+        ObjectNode interview = root.putObject("interviewAnalysis");
+        interview.set("voiceCoaching", objectMapper.createArrayNode());
+
+        ObjectNode sttAnalysis = interview.putObject("sttAnalysis");
+        sttAnalysis.put("totalWords", Math.max(0, totalWords));
+        sttAnalysis.put("averageResponseTime", Math.max(0, avgRespSec));
+        sttAnalysis.putNull("sentimentScore");
+
+        ObjectNode keywordUsage = sttAnalysis.putObject("keywordUsage");
+        keywordUsage.put("technical", 0);
+        keywordUsage.put("soft", 0);
+        keywordUsage.put("company", 0);
+
+        sttAnalysis.put("overallFeedback", "");
 
         // summary
         ObjectNode summary = root.putObject("summary");
         summary.put("answeredQuestions", answered);
         summary.put("totalQuestions", total);
         summary.put("completionRate", total == 0 ? 0 : clamp0_100((int) Math.round(answered * 100.0 / total)));
-
-        int avgRespSec = respSecCount == 0 ? 0 : (int) Math.round(totalRespSec * 1.0 / respSecCount);
         summary.put("avgResponseSec", Math.max(0, avgRespSec));
         summary.put("totalWordCount", Math.max(0, totalWords));
+        summary.put("fillerWordCount", (Integer) null);
 
-        // 현재 세션만으로 계산 안 되거나 아직 산식이 없는 값은 null
         summary.putNull("overallScore");
         summary.putNull("percentileRank");
         summary.putNull("previousScore");
@@ -196,7 +201,6 @@ public class InterviewEvaluationService {
         summary.putNull("communicationIndex");
         summary.putNull("verdict");
 
-        // LLM 채움 대상
         summary.set("topKeywords", objectMapper.createArrayNode());
         summary.set("strengths", objectMapper.createArrayNode());
         summary.set("weaknesses", objectMapper.createArrayNode());
@@ -214,23 +218,21 @@ public class InterviewEvaluationService {
         comparison.set("scoreHistory", objectMapper.createArrayNode());
         comparison.set("categoryComparison", emptyCategoryComparison());
 
-        // interviewAnalysis.voiceCoaching
-        interview.set("voiceCoaching", objectMapper.createArrayNode());
 
         return root;
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // 2) LLM 1회 호출 + merge (서버 템플릿/폴백 금지)
-    // ─────────────────────────────────────────────────────────────
-
+    /**
+     * LLM 1회 호출
+     * - summary / competency / voiceCoaching 는 session result_json 에 merge
+     * - questionResponses 는 turn.feedback_json 으로 저장
+     */
     private void applyLlmInsights(ObjectNode evaluation, InterviewSession session, List<InterviewTurn> turns) {
         ObjectNode meta = evaluation.with("meta");
         meta.put("llmProvider", "openai");
         meta.put("llmModel", safe(modelNameOrUnknown()));
         meta.put("llmStatus", "PENDING");
 
-        // 1) LLM 입력 payload
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("sessionId", session.getSessionId());
         payload.put("position", safe(session.getTitle()));
@@ -243,6 +245,33 @@ public class InterviewEvaluationService {
             one.put("question", safe(t.getAiQuestion()));
             one.put("answer", safe(firstNonBlank(t.getUserAnswerText(), t.getSttText(), "")).trim());
             one.put("durationSec", safeInt(t.getAnswerAudioDurationSec(), 0));
+
+            JsonNode scoreRoot = parseJson(t.getAudioScoresJson());
+            ObjectNode voice = one.putObject("voice");
+            voice.put("overallVoiceScore", nvl(firstInt(
+                    scoreRoot,
+                    "overall.overallVoiceScore",
+                    "overallVoiceScore",
+                    "voice.overallVoiceScore"
+            )));
+            voice.put("confidenceScore", nvl(firstInt(
+                    scoreRoot,
+                    "confidence.confidenceScore",
+                    "confidenceScore",
+                    "voice.confidenceScore"
+            )));
+            voice.put("fluencyScore", nvl(firstInt(
+                    scoreRoot,
+                    "fluency.fluencyScore",
+                    "fluencyScore",
+                    "voice.fluencyScore"
+            )));
+            voice.put("tremorRiskScore", nvl(firstInt(
+                    scoreRoot,
+                    "tremor.tremorRiskScore",
+                    "tremorRiskScore",
+                    "voice.tremorRiskScore"
+            )));
         }
 
         String system = readResource(interviewEvalSystemPrompt);
@@ -255,6 +284,7 @@ public class InterviewEvaluationService {
             throw new IllegalStateException("LLM output is null");
         }
 
+        log.info("[LLM SUMMARY RAW] {}", safeWrite(out.path("summary")));
         log.info("[LLM RAW OUT] summaryExists={}, competencyExists={}, interviewExists={}, qResponsesSize={}",
                 out.path("summary").isObject(),
                 out.path("competency").isObject(),
@@ -267,51 +297,195 @@ public class InterviewEvaluationService {
             throw new IllegalStateException("LLM returned invalid JSON. raw=" + shorten(raw, 500));
         }
 
-        // 2) summary merge
+        // summary merge
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
         JsonNode outSummary = out.path("summary");
+
         summary.set("topKeywords", normalizeTopKeywords(outSummary.path("topKeywords")));
         summary.set("strengths", arrayOrEmpty(outSummary.path("strengths")));
         summary.set("weaknesses", arrayOrEmpty(outSummary.path("weaknesses")));
         summary.set("nextActions", normalizeNextActions(outSummary.path("nextActions")));
 
-        // 3) competency merge
+        summary.put("jobFitIndex", clamp0_100(outSummary.path("jobFitIndex").asInt(0)));
+        summary.put("confidenceIndex", clamp0_100(outSummary.path("confidenceIndex").asInt(0)));
+        summary.put("technicalIndex", clamp0_100(outSummary.path("technicalIndex").asInt(0)));
+        summary.put("communicationIndex", clamp0_100(outSummary.path("communicationIndex").asInt(0)));
+        summary.put("sentimentScore", clamp0_100(outSummary.path("sentimentScore").asInt(0)));
+
+        int fillerWordCount = Math.max(0, outSummary.path("fillerWordCount").asInt(0));
+        summary.put("fillerWordCount", fillerWordCount);
+
+        int totalWordCount = Math.max(0, summary.path("totalWordCount").asInt(0));
+        int fillerWordRate = 0;
+        if (totalWordCount > 0) {
+            fillerWordRate = clamp0_100((int) Math.round((fillerWordCount * 100.0) / totalWordCount));
+        }
+        summary.put("fillerWordRate", fillerWordRate);
+
+        if (!outSummary.path("verdict").asText("").trim().isBlank()) {
+            summary.put("verdict", outSummary.path("verdict").asText("").trim());
+        }
+
+        // competency merge
         ObjectNode competency = (ObjectNode) evaluation.with("competency");
         JsonNode outComp = out.path("competency");
 
         JsonNode technical = outComp.path("technical");
         if (technical.isObject()) {
-            competency.set("technical", (ObjectNode) technical);
+            competency.set("technical", technical.deepCopy());
         }
 
         JsonNode soft = outComp.path("soft");
         if (soft.isObject()) {
-            competency.set("soft", (ObjectNode) soft);
+            competency.set("soft", soft.deepCopy());
         }
 
         competency.set("improvements", normalizeImprovements(outComp.path("improvements")));
 
-        // 4) interviewAnalysis merge
+        // summary fallback
+        int technicalIndex = clamp0_100(summary.path("technicalIndex").asInt(0));
+        if (technicalIndex == 0 && competency.path("technical").path("current").isNumber()) {
+            technicalIndex = clamp0_100(competency.path("technical").path("current").asInt());
+        }
+        summary.put("technicalIndex", technicalIndex);
+
+        int communicationIndex = clamp0_100(summary.path("communicationIndex").asInt(0));
+        if (communicationIndex == 0 && competency.path("soft").path("details").path("communication").isNumber()) {
+            communicationIndex = clamp0_100(competency.path("soft").path("details").path("communication").asInt());
+        }
+        summary.put("communicationIndex", communicationIndex);
+
+        int confidenceIndex = clamp0_100(summary.path("confidenceIndex").asInt(0));
+        if (confidenceIndex == 0) {
+            int sum = 0;
+            int count = 0;
+            for (InterviewTurn t : turns) {
+                JsonNode scoreRoot = parseJson(t.getAudioScoresJson());
+                Integer c = firstInt(
+                        scoreRoot,
+                        "confidence.confidenceScore",
+                        "confidenceScore",
+                        "voice.confidenceScore"
+                );
+                if (c != null) {
+                    sum += c;
+                    count++;
+                }
+            }
+            if (count > 0) {
+                confidenceIndex = clamp0_100((int) Math.round(sum * 1.0 / count));
+            }
+        }
+        summary.put("confidenceIndex", confidenceIndex);
+
+        // interviewAnalysis merge
         ObjectNode interview = (ObjectNode) evaluation.with("interviewAnalysis");
         JsonNode outInterview = out.path("interviewAnalysis");
 
         interview.set("voiceCoaching", arrayOrEmpty(outInterview.path("voiceCoaching")));
 
-        mergeQuestionResponses(
-                (ArrayNode) interview.withArray("questionResponses"),
-                out.path("interviewAnalysis").path("questionResponses")
-        );
+        ObjectNode sttAnalysis = (ObjectNode) interview.with("sttAnalysis");
+        JsonNode outStt = outInterview.path("sttAnalysis");
+
+        String overallFeedback = outStt.path("overallFeedback").asText("").trim();
+        sttAnalysis.put("overallFeedback", overallFeedback);
+
+        JsonNode keywordUsageNode = outStt.path("keywordUsage");
+        if (keywordUsageNode.isObject()) {
+            ObjectNode keywordUsage = (ObjectNode) sttAnalysis.with("keywordUsage");
+            keywordUsage.put("technical", Math.max(0, keywordUsageNode.path("technical").asInt(0)));
+            keywordUsage.put("soft", Math.max(0, keywordUsageNode.path("soft").asInt(0)));
+            keywordUsage.put("company", Math.max(0, keywordUsageNode.path("company").asInt(0)));
+        }
+
+        sttAnalysis.put("sentimentScore", clamp0_100(outSummary.path("sentimentScore").asInt(0)));
+
+        // questionResponses 는 turn.feedback_json 으로 저장
+        saveQuestionResponsesToTurns(turns, outInterview.path("questionResponses"));
 
         meta.put("llmStatus", "OK");
         meta.put("llmMergedAt", LocalDateTime.now().toString());
     }
 
+    private int calculatePercentile(int overallScore, Long sessionId) {
+
+        List<Object[]> rows = evaluationRepository.getScoreStats(overallScore, sessionId);
+
+        if (rows == null || rows.isEmpty()) {
+            return 0;
+        }
+
+        Object[] stats = rows.get(0);
+
+        long lowerCount = stats[0] == null ? 0L : ((Number) stats[0]).longValue();
+        long equalCount = stats[1] == null ? 0L : ((Number) stats[1]).longValue();
+        long totalCount = stats[2] == null ? 0L : ((Number) stats[2]).longValue();
+
+        if (totalCount <= 0) {
+            return 0;
+        }
+
+        double percentile =
+                ((lowerCount + (equalCount * 0.5)) * 100.0) / totalCount;
+
+        return clamp0_100((int) Math.round(percentile));
+    }
+
     /**
-     * topKeywords는 "딱 3개"를 원하니 normalize 해줌.
-     * - 부족하면 있는 것만 (빈 문자열은 제거)
-     * - 초과하면 앞 3개만
-     * - 서버가 기본 키워드 주입하는 폴백은 금지 (빈 배열 가능)
+     * LLM questionResponses -> interview_turn.feedback_json 저장
+     * feedback_json 은 기존값 merge 없이 turn별로 새로 생성하여 저장한다.
      */
+    private void saveQuestionResponsesToTurns(List<InterviewTurn> turns, JsonNode outArr) {
+        if (outArr == null || !outArr.isArray()) {
+            log.warn("[LLM MERGE] questionResponses is empty or not array");
+            return;
+        }
+
+        Map<Integer, InterviewTurn> turnMap = new HashMap<>();
+        for (InterviewTurn t : turns) {
+            turnMap.put(safeInt(t.getTurnNo(), 0), t);
+        }
+
+        int savedCount = 0;
+
+        for (JsonNode node : outArr) {
+            int turnNo = node.path("turnNo").asInt(0);
+            if (turnNo <= 0) continue;
+
+            InterviewTurn turn = turnMap.get(turnNo);
+            if (turn == null) continue;
+
+            ObjectNode feedback = objectMapper.createObjectNode();
+
+            feedback.put("score", clamp0_100(node.path("score").asInt(0)));
+            feedback.put("oneLineFeedback", node.path("oneLineFeedback").asText("").trim());
+            feedback.put("fullFeedback", node.path("fullFeedback").asText("").trim());
+
+            JsonNode sentimentNode = node.get("sentimentScore");
+            if (sentimentNode != null && !sentimentNode.isNull() && sentimentNode.isNumber()) {
+                feedback.put("sentimentScore", clamp0_100(sentimentNode.asInt()));
+            } else {
+                feedback.putNull("sentimentScore");
+            }
+
+            JsonNode keywordsNode = node.get("keywords");
+            if (keywordsNode != null && keywordsNode.isArray()) {
+                feedback.set("keywords", keywordsNode.deepCopy());
+            } else {
+                feedback.set("keywords", objectMapper.createArrayNode());
+            }
+
+            turn.setFeedbackJson(safeWrite(feedback));
+            savedCount++;
+        }
+
+        if (savedCount > 0) {
+            turnRepository.saveAll(turns);
+        }
+
+        log.info("[LLM MERGE] saved turn feedback_json={}/{}", savedCount, turns.size());
+    }
+
     private ArrayNode normalizeTopKeywords(JsonNode node) {
         ArrayNode out = objectMapper.createArrayNode();
         if (node == null || !node.isArray()) return out;
@@ -325,27 +499,16 @@ public class InterviewEvaluationService {
         return out;
     }
 
-    /**
-     * 모델명 기록용 (원하면 삭제)
-     * InterviewOpenAiService에 model getter가 없으면 그냥 "unknown" 반환
-     */
     private String modelNameOrUnknown() {
         return "unknown";
     }
 
-    /**
-     * 에러메시지 너무 길면 잘라서 예외 메시지에 넣기
-     */
     private String shorten(String s, int max) {
         if (s == null) return "";
         String t = s.trim();
         if (t.length() <= max) return t;
         return t.substring(0, max) + "...";
     }
-
-    // ─────────────────────────────────────────────────────────────
-    // Utils
-    // ─────────────────────────────────────────────────────────────
 
     private String formatDuration(LocalDateTime startedAt, LocalDateTime endedAt) {
         if (startedAt == null || endedAt == null) return "";
@@ -468,7 +631,6 @@ public class InterviewEvaluationService {
         return def;
     }
 
-    // 한국어/영어 섞여도 대충 단어 수 세기(차트용)
     private int countWords(String s) {
         if (s == null) return 0;
         String t = s.trim();
@@ -484,17 +646,39 @@ public class InterviewEvaluationService {
         }
     }
 
-    private int computeOverallFromQuestionResponses(JsonNode questionResponses) {
-        if (questionResponses == null || !questionResponses.isArray()) return 0;
+    /**
+     * 총점은 세션 result_json.questionResponses 가 아니라
+     * interview_turn.feedback_json.score 평균으로 계산
+     */
+    private int computeOverallScore(List<InterviewTurn> turns, int totalQuestions) {
+        double contentScore = computeContentScore(turns);
+        double voiceScore = computeVoiceScore(turns);
+        double completionScore = computeCompletionScore(turns, totalQuestions);
 
+        int overall = (int) Math.round(
+                contentScore * 0.60 +
+                        voiceScore * 0.25 +
+                        completionScore * 0.15
+        );
+
+        return clamp0_100(overall);
+    }
+
+    private int computeContentScore(List<InterviewTurn> turns) {
         int sum = 0;
         int count = 0;
 
-        for (JsonNode item : questionResponses) {
-            int score = clamp0_100(item.path("score").asInt(0));
-            if (score > 0) {
+        for (InterviewTurn turn : turns) {
+            try {
+                String json = turn.getFeedbackJson();
+                if (json == null || json.isBlank()) continue;
+
+                JsonNode node = objectMapper.readTree(json);
+                int score = clamp0_100(node.path("score").asInt(0));
+
                 sum += score;
                 count++;
+            } catch (Exception ignored) {
             }
         }
 
@@ -502,53 +686,54 @@ public class InterviewEvaluationService {
         return clamp0_100((int) Math.round(sum * 1.0 / count));
     }
 
-    private void mergeQuestionResponses(ArrayNode baseArr, JsonNode outArr) {
-        if (baseArr == null || !baseArr.isArray()) return;
-        if (outArr == null || !outArr.isArray()) {
-            log.warn("[LLM MERGE] outArr is empty or not array");
-            return;
-        }
+    private int computeVoiceScore(List<InterviewTurn> turns) {
+        int sum = 0;
+        int count = 0;
 
-        int mergedCount = 0;
+        for (InterviewTurn turn : turns) {
+            try {
+                String json = turn.getAudioScoresJson();
+                if (json == null || json.isBlank()) continue;
 
-        java.util.Map<Integer, JsonNode> byTurnNo = new java.util.HashMap<>();
-        for (JsonNode node : outArr) {
-            int turnNo = node.path("turnNo").asInt(0);
-            if (turnNo > 0) {
-                byTurnNo.put(turnNo, node);
+                JsonNode node = objectMapper.readTree(json);
+
+                Integer score = firstInt(
+                        node,
+                        "overall.overallVoiceScore",
+                        "overallVoiceScore",
+                        "voice.overallVoiceScore"
+                );
+
+                if (score != null) {
+                    sum += clamp0_100(score);
+                    count++;
+                }
+            } catch (Exception ignored) {
             }
         }
 
-        for (JsonNode node : baseArr) {
-            if (!(node instanceof ObjectNode base)) continue;
+        if (count == 0) return 0;
+        return clamp0_100((int) Math.round(sum * 1.0 / count));
+    }
 
-            int turnNo = base.path("turnNo").asInt(0);
-            JsonNode llmNode = byTurnNo.get(turnNo);
-            if (llmNode == null || !llmNode.isObject()) continue;
+    private int computeCompletionScore(List<InterviewTurn> turns, int totalQuestions) {
+        if (totalQuestions <= 0) return 0;
 
-            int beforeScore = base.path("score").asInt(0);
+        int answered = 0;
 
-            int score = clamp0_100(llmNode.path("score").asInt(0));
-            if (score > 0) {
-                base.put("score", score);
-            }
+        for (InterviewTurn turn : turns) {
+            String answer = firstNonBlank(
+                    turn.getUserAnswerText(),
+                    turn.getSttText(),
+                    ""
+            ).trim();
 
-            String oneLine = llmNode.path("oneLineFeedback").asText("").trim();
-            if (!oneLine.isBlank()) {
-                base.put("oneLineFeedback", oneLine);
-            }
-
-            String full = llmNode.path("fullFeedback").asText("").trim();
-            if (!full.isBlank()) {
-                base.put("fullFeedback", full);
-            }
-
-            if (beforeScore != base.path("score").asInt(0) || !oneLine.isBlank() || !full.isBlank()) {
-                mergedCount++;
+            if (!answer.isBlank()) {
+                answered++;
             }
         }
 
-        log.info("[LLM MERGE] merged questionResponses={}/{}", mergedCount, baseArr.size());
+        return clamp0_100((int) Math.round(answered * 100.0 / totalQuestions));
     }
 
     private ObjectNode emptyCompetencyBlock() {
@@ -559,46 +744,11 @@ public class InterviewEvaluationService {
         return block;
     }
 
-    private ObjectNode buildTechnicalCompetency(int overall) {
-        int current = clamp0_100(overall);
-        int target = clamp0_100(Math.max(current + 10, 80));
-
-        ObjectNode details = objectMapper.createObjectNode();
-        details.put("frontEnd", clamp0_100(current - 15));
-        details.put("backEnd", clamp0_100(current + 5));
-        details.put("database", clamp0_100(current));
-        details.put("deployment", clamp0_100(current - 3));
-
-        ObjectNode block = objectMapper.createObjectNode();
-        block.put("current", current);
-        block.put("target", target);
-        block.set("details", details);
-        return block;
-    }
-
-    private ObjectNode buildSoftCompetency(int overall) {
-        int current = clamp0_100(Math.max(overall - 3, 0));
-        int target = clamp0_100(Math.max(current + 10, 80));
-
-        ObjectNode details = objectMapper.createObjectNode();
-        details.put("communication", clamp0_100(current + 2));
-        details.put("teamwork", clamp0_100(current - 2));
-        details.put("leadership", clamp0_100(current - 6));
-        details.put("presentation", clamp0_100(current));
-
-        ObjectNode block = objectMapper.createObjectNode();
-        block.put("current", current);
-        block.put("target", target);
-        block.set("details", details);
-        return block;
-    }
     private ObjectNode emptyCategoryComparison() {
         ObjectNode root = objectMapper.createObjectNode();
-
         root.set("technical", emptyCategoryScoreBlock());
         root.set("communication", emptyCategoryScoreBlock());
         root.set("confidence", emptyCategoryScoreBlock());
-
         return root;
     }
 
@@ -610,4 +760,40 @@ public class InterviewEvaluationService {
         return block;
     }
 
+    private JsonNode parseJson(String json) {
+        try {
+            if (json == null || json.isBlank()) {
+                return objectMapper.createObjectNode();
+            }
+            return objectMapper.readTree(json);
+        } catch (Exception e) {
+            return objectMapper.createObjectNode();
+        }
+    }
+
+    private Integer firstInt(JsonNode root, String... paths) {
+        if (root == null || root.isMissingNode() || root.isNull()) return null;
+
+        for (String path : paths) {
+            JsonNode cur = root;
+            boolean ok = true;
+
+            for (String part : path.split("\\.")) {
+                cur = cur.path(part);
+                if (cur.isMissingNode() || cur.isNull()) {
+                    ok = false;
+                    break;
+                }
+            }
+
+            if (ok && cur.isNumber()) {
+                return cur.asInt();
+            }
+        }
+        return null;
+    }
+
+    private int nvl(Integer v) {
+        return v == null ? 0 : v;
+    }
 }

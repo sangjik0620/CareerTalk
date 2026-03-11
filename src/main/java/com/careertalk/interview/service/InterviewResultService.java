@@ -1,5 +1,6 @@
 package com.careertalk.interview.service;
 
+import com.careertalk.interview.dto.ComparisonResponse;
 import com.careertalk.interview.dto.InterviewResultV2Response;
 import com.careertalk.interview.dto.InterviewSessionResultResponse;
 import com.careertalk.interview.entity.InterviewTurn;
@@ -21,6 +22,7 @@ public class InterviewResultService {
     private final InterviewService interviewService;
     private final InterviewEvaluationService evaluationService;
     private final InterviewTurnRepository turnRepository;
+    private final InterviewComparisonService comparisonService;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -28,6 +30,10 @@ public class InterviewResultService {
 
         String analysisStatus = evaluationService.getAnalysisStatus(sessionId);
         JsonNode evaluation = evaluationService.getEvaluationResultJsonOrNull(sessionId);
+
+        JsonNode sanitizedEvaluation = sanitizeEvaluation(evaluation);
+
+        ComparisonResponse comparison = comparisonService.buildComparison(sessionId, sanitizedEvaluation);
 
         InterviewSessionResultResponse voice = interviewService.getVoiceResult(sessionId);
 
@@ -45,20 +51,14 @@ public class InterviewResultService {
         List<InterviewResultV2Response.TurnDetail> details = new ArrayList<>();
 
         for (InterviewTurn t : turnEntities) {
-
-            InterviewSessionResultResponse.TurnItem voiceItem =
-                    voiceTurnMap.get(t.getTurnNo());
-
+            InterviewSessionResultResponse.TurnItem voiceItem = voiceTurnMap.get(t.getTurnNo());
             String audioUrl = (voiceItem != null) ? voiceItem.audioUrl() : null;
 
-            Map<String, Object> audioMetrics =
-                    parseJsonToMap(t.getAudioMetricsJson());
+            Map<String, Object> audioMetrics = parseJsonToMap(t.getAudioMetricsJson());
+            Map<String, Object> pythonExtracted = parseJsonToMap(t.getPythonMetricsJson());
 
-            Map<String, Object> pythonExtracted =
-                    parseJsonToMap(t.getPythonMetricsJson());
-
-            InterviewResultV2Response.Scores scores =
-                    extractScoresSummary(t.getAudioScoresJson());
+            InterviewResultV2Response.Scores scores = extractScoresSummary(t.getAudioScoresJson());
+            InterviewResultV2Response.Feedback feedback = extractFeedbackSummary(t.getFeedbackJson());
 
             InterviewResultV2Response.Audio audio =
                     new InterviewResultV2Response.Audio(
@@ -82,7 +82,8 @@ public class InterviewResultService {
                             firstNonBlank(t.getUserAnswerText(), t.getSttText(), null),
                             audio,
                             metrics,
-                            scores
+                            scores,
+                            feedback
                     );
 
             details.add(dto);
@@ -92,9 +93,24 @@ public class InterviewResultService {
                 sessionId,
                 analysisStatus,
                 LocalDateTime.now(),
-                evaluation,
+                sanitizedEvaluation,
+                comparison,
                 details
         );
+    }
+
+    private JsonNode sanitizeEvaluation(JsonNode evaluation) {
+        if (evaluation == null || !evaluation.isObject()) {
+            return evaluation;
+        }
+
+        JsonNode copy = evaluation.deepCopy();
+
+        if (copy instanceof com.fasterxml.jackson.databind.node.ObjectNode obj) {
+            obj.remove("comparison");
+        }
+
+        return copy;
     }
 
     private Map<String, Object> parseJsonToMap(String json) {
@@ -110,6 +126,72 @@ public class InterviewResultService {
         }
     }
 
+    private InterviewResultV2Response.Feedback extractFeedbackSummary(String json) {
+        if (json == null || json.isBlank()) {
+            return emptyFeedback();
+        }
+
+        try {
+            JsonNode root = objectMapper.readTree(json);
+
+            Integer score = root.path("score").isNumber() ? root.path("score").asInt() : null;
+
+            String oneLineFeedback = blankToNull(root.path("oneLineFeedback").asText(null));
+            String fullFeedback = blankToNull(root.path("fullFeedback").asText(null));
+            Integer sentimentScore = root.path("sentimentScore").isNumber() ? root.path("sentimentScore").asInt() : null;
+
+            JsonNode kw = root.path("keywords");
+            InterviewResultV2Response.Keywords keywords = new InterviewResultV2Response.Keywords(
+                    toStringList(kw.path("technical")),
+                    toStringList(kw.path("soft")),
+                    toStringList(kw.path("company"))
+            );
+
+            JsonNode voice = root.path("voice");
+            InterviewResultV2Response.VoiceFeedback voiceFeedback = new InterviewResultV2Response.VoiceFeedback(
+                    getNullableInt(voice, "overallVoiceScore"),
+                    getNullableInt(voice, "confidenceScore"),
+                    getNullableInt(voice, "fluencyScore"),
+                    getNullableInt(voice, "tremorRiskScore"),
+                    toStringList(voice.path("strengths")),
+                    toStringList(voice.path("weaknesses"))
+            );
+
+            return new InterviewResultV2Response.Feedback(
+                    score,
+                    oneLineFeedback,
+                    fullFeedback,
+                    sentimentScore,
+                    keywords,
+                    voiceFeedback
+            );
+
+        } catch (Exception e) {
+            return emptyFeedback();
+        }
+    }
+
+    private InterviewResultV2Response.Feedback emptyFeedback() {
+        return new InterviewResultV2Response.Feedback(
+                null,
+                null,
+                null,
+                null,
+                new InterviewResultV2Response.Keywords(
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        Collections.emptyList()
+                ),
+                new InterviewResultV2Response.VoiceFeedback(
+                        null,
+                        null,
+                        null,
+                        null,
+                        Collections.emptyList(),
+                        Collections.emptyList()
+                )
+        );
+    }
 
     private InterviewResultV2Response.Scores extractScoresSummary(String json) {
 
@@ -252,6 +334,7 @@ public class InterviewResultService {
 
         return def;
     }
+
     private Integer firstInt(JsonNode root, String... paths) {
         for (String path : paths) {
             Integer value = getIntPath(root, path);
@@ -318,5 +401,32 @@ public class InterviewResultService {
                 }
             }
         }
+    }
+
+    private Integer getNullableInt(JsonNode node, String field) {
+        JsonNode n = node.get(field);
+        if (n == null || n.isNull() || !n.isNumber()) {
+            return null;
+        }
+        return n.asInt();
+    }
+
+    private List<String> toStringList(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return Collections.emptyList();
+        }
+
+        List<String> out = new ArrayList<>();
+        for (JsonNode item : node) {
+            String s = item.asText("").trim();
+            if (!s.isBlank()) {
+                out.add(s);
+            }
+        }
+        return out;
+    }
+
+    private String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s;
     }
 }

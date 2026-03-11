@@ -8,9 +8,10 @@ import java.util.Map;
 
 public record InterviewResultV2Response(
         Long sessionId,
-        String analysisStatus,          // PENDING/PROCESSING/DONE/FAILED
+        String analysisStatus,
         LocalDateTime generatedAt,
         JsonNode evaluation,
+        ComparisonResponse comparison,
         List<TurnDetail> turns
 ) {
     public record TurnDetail(
@@ -21,7 +22,8 @@ public record InterviewResultV2Response(
             String sttText,
             Audio audio,
             Metrics metrics,
-            Scores scores
+            Scores scores,
+            Feedback feedback
     ) {}
 
     public record Audio(
@@ -31,8 +33,8 @@ public record InterviewResultV2Response(
     ) {}
 
     public record Metrics(
-            Map<String, Object> audioMetrics,         // audio_metrics_json 전체(또는 필요한 일부)
-            Map<String, Object> pythonExtracted       // python_metrics_json.extracted
+            Map<String, Object> audioMetrics,
+            Map<String, Object> pythonExtracted
     ) {}
 
     public record Scores(
@@ -43,6 +45,30 @@ public record InterviewResultV2Response(
             String overallGrade,
             Double overallReliability,
             List<String> flags,
-            Map<String, Object> raw                    // 필요하면 full raw scores (선택)
+            Map<String, Object> raw
+    ) {}
+
+    public record Feedback(
+            Integer score,
+            String oneLineFeedback,
+            String fullFeedback,
+            Integer sentimentScore,
+            Keywords keywords,
+            VoiceFeedback voice
+    ) {}
+
+    public record Keywords(
+            List<String> technical,
+            List<String> soft,
+            List<String> company
+    ) {}
+
+    public record VoiceFeedback(
+            Integer overallVoiceScore,
+            Integer confidenceScore,
+            Integer fluencyScore,
+            Integer tremorRiskScore,
+            List<String> strengths,
+            List<String> weaknesses
     ) {}
 }

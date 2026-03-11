@@ -1,7 +1,21 @@
 package com.careertalk.analysis.common.controller;
 
+import com.careertalk.analysis.common.dto.AnalysisHistoryResponse;
 import com.careertalk.analysis.common.entity.AnalysisEntity;
 import com.careertalk.analysis.common.repository.AnalysisRepository;
+import com.careertalk.analysis.coverletter.entity.CIEssay;
+import com.careertalk.analysis.coverletter.repository.CIEssayRepository;
+import com.careertalk.analysis.portfolio.entity.PortfolioEntity;
+import com.careertalk.analysis.portfolio.repository.PortfolioRepository;
+import com.careertalk.analysis.resume.entity.ResumeEntity;
+import com.careertalk.analysis.resume.repository.ResumeRepository;
+import com.careertalk.auth.entity.Member;
+import com.careertalk.auth.jwt.JwtUtil;
+import com.careertalk.auth.repository.MemberRepository;
+import com.careertalk.file.entity.FileEntity;
+import com.careertalk.file.repository.FileRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
@@ -12,6 +26,7 @@ import com.careertalk.auth.entity.Member;
 import com.careertalk.auth.jwt.JwtUtil;
 import com.careertalk.auth.service.MemberService;
 
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -23,6 +38,13 @@ public class AnalysisQueryController {
     private final AnalysisRepository analysisRepository;
     private final JwtUtil jwtUtil;
     private final MemberService memberService;
+    private final MemberRepository memberRepository;
+    private final ResumeRepository resumeRepository;
+    private final PortfolioRepository portfolioRepository;
+    private final CIEssayRepository ciEssayRepository;
+    private final FileRepository fileRepository;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @PostMapping("/batch-by-ids")
     public ResponseEntity<List<AnalysisEntity>> batchByIds(@RequestBody BatchByIdsRequest req) {
@@ -30,20 +52,19 @@ public class AnalysisQueryController {
             return ResponseEntity.ok(List.of());
         }
 
-        // 1 중복 제거 + null 제거
         List<Long> ids = req.getAnalysisIds().stream()
                 .filter(Objects::nonNull)
                 .distinct()
                 .toList();
 
-        if (ids.isEmpty()) return ResponseEntity.ok(List.of());
+        if (ids.isEmpty()) {
+            return ResponseEntity.ok(List.of());
+        }
 
-        // 2 조회
         List<AnalysisEntity> found = analysisRepository.findAllById(ids);
 
-        // 3 요청 순서대로 정렬해서 반환
         Map<Long, AnalysisEntity> map = found.stream()
-                .collect(Collectors.toMap(AnalysisEntity::getAnalysisId, a -> a, (a,b) -> a));
+                .collect(Collectors.toMap(AnalysisEntity::getAnalysisId, a -> a, (a, b) -> a));
 
         List<AnalysisEntity> ordered = ids.stream()
                 .map(map::get)
@@ -53,86 +74,193 @@ public class AnalysisQueryController {
         return ResponseEntity.ok(ordered);
     }
 
-    @Getter @Setter
+    @Getter
+    @Setter
     public static class BatchByIdsRequest {
         private List<Long> analysisIds;
     }
 
-    // 마이페이지 분석 탭 데이터 조회 API
     @GetMapping("/my")
-    public ResponseEntity<Map<String, List<Map<String, Object>>>> getMyAnalyses(
-            @RequestHeader(value = "Authorization", required = false) String token) {
+    public ResponseEntity<AnalysisHistoryResponse> getMyAnalyses(
+            @RequestHeader("Authorization") String authHeader
+    ) {
+        Long userNum = extractUserNum(authHeader);
 
-        // 1. 토큰 유효성 검사
-        if (token == null || !token.startsWith("Bearer ")) {
-            return ResponseEntity.status(401).build();
+        List<AnalysisEntity> list = analysisRepository.findByUserNumOrderByCreatedAtDesc(userNum);
+
+        List<AnalysisHistoryResponse.Item> resume = new ArrayList<>();
+        List<AnalysisHistoryResponse.Item> coverLetter = new ArrayList<>();
+        List<AnalysisHistoryResponse.Item> portfolio = new ArrayList<>();
+
+        for (AnalysisEntity a : list) {
+            String type = a.getTargetType();
+            AnalysisHistoryResponse.Item item = null;
+
+            if ("RESUME".equalsIgnoreCase(type)) {
+                item = resumeRepository.findById(a.getTargetId())
+                        .map(r -> toResumeItem(a, r))
+                        .orElse(null);
+
+                if (item != null) {
+                    resume.add(item);
+                }
+
+            } else if ("ESSAY".equalsIgnoreCase(type)) {
+                item = ciEssayRepository.findById(a.getTargetId())
+                        .map(e -> toEssayItem(a, e))
+                        .orElse(null);
+
+                if (item != null) {
+                    coverLetter.add(item);
+                }
+
+            } else if ("PORTFOLIO".equalsIgnoreCase(type)) {
+                item = portfolioRepository.findById(a.getTargetId())
+                        .map(p -> toPortfolioItem(a, p))
+                        .orElse(null);
+
+                if (item != null) {
+                    portfolio.add(item);
+                }
+            }
+        }
+
+        return ResponseEntity.ok(
+                AnalysisHistoryResponse.builder()
+                        .resume(resume)
+                        .coverLetter(coverLetter)
+                        .portfolio(portfolio)
+                        .build()
+        );
+    }
+
+    private Long extractUserNum(String authHeader) {
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            throw new RuntimeException("인증 정보가 없습니다.");
+        }
+
+        String token = authHeader.substring(7);
+
+        if (!jwtUtil.validateToken(token)) {
+            throw new RuntimeException("유효하지 않은 토큰입니다.");
+        }
+
+        String loginId = jwtUtil.getLoginId(token);
+
+        Member member = memberRepository.findByLoginId(loginId)
+                .orElseThrow(() -> new RuntimeException("회원 정보를 찾을 수 없습니다."));
+
+        return member.getUserNum();
+    }
+
+    private AnalysisHistoryResponse.Item toResumeItem(AnalysisEntity a, ResumeEntity r) {
+        String fileName = fileRepository.findById(r.getFileId())
+                .map(FileEntity::getOriginalName)
+                .orElse("");
+
+        return AnalysisHistoryResponse.Item.builder()
+                .id(a.getAnalysisId())
+                .targetId(r.getResumeId())
+                .analysisId(a.getAnalysisId())
+                .title(r.getResumeTitle())
+                .fileName(fileName)
+                .analyzedAt(formatDate(a.getAnalyzedAt(), a.getCreatedAt()))
+                .score(a.getOverallScore() == null ? 0 : a.getOverallScore())
+                .keywords(extractKeywords(a.getTargetJob(), a.getSummaryDetail()))
+                .expectedQuestions(extractExpectedQuestions(a.getExpectedQuestionsJson()))
+                .build();
+    }
+
+    private AnalysisHistoryResponse.Item toEssayItem(AnalysisEntity a, CIEssay e) {
+        String fileName = e.getFileId() == null
+                ? ""
+                : fileRepository.findById(e.getFileId())
+                .map(FileEntity::getOriginalName)
+                .orElse("");
+
+        return AnalysisHistoryResponse.Item.builder()
+                .id(a.getAnalysisId())
+                .targetId(e.getEssayId())
+                .analysisId(a.getAnalysisId())
+                .title(e.getTitle() == null || e.getTitle().isBlank() ? "자기소개서" : e.getTitle())
+                .fileName(fileName)
+                .analyzedAt(formatDate(a.getAnalyzedAt(), a.getCreatedAt()))
+                .score(a.getOverallScore() == null ? 0 : a.getOverallScore())
+                .keywords(extractKeywords(a.getTargetJob(), a.getSummaryDetail()))
+                .expectedQuestions(extractExpectedQuestions(a.getExpectedQuestionsJson()))
+                .build();
+    }
+
+    private AnalysisHistoryResponse.Item toPortfolioItem(AnalysisEntity a, PortfolioEntity p) {
+        String fileName = fileRepository.findById(p.getFileId())
+                .map(FileEntity::getOriginalName)
+                .orElse("");
+
+        return AnalysisHistoryResponse.Item.builder()
+                .id(a.getAnalysisId())
+                .targetId(p.getPortfolioId())
+                .analysisId(a.getAnalysisId())
+                .title(p.getTitle())
+                .fileName(fileName)
+                .analyzedAt(formatDate(a.getAnalyzedAt(), a.getCreatedAt()))
+                .score(a.getOverallScore() == null ? 0 : a.getOverallScore())
+                .keywords(extractKeywords(a.getTargetJob(), a.getSummaryDetail()))
+                .expectedQuestions(extractExpectedQuestions(a.getExpectedQuestionsJson()))
+                .build();
+    }
+
+    private String formatDate(java.time.LocalDateTime analyzedAt, java.time.LocalDateTime createdAt) {
+        java.time.LocalDateTime base = analyzedAt != null ? analyzedAt : createdAt;
+        return base == null ? "" : base.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+    }
+
+    private List<String> extractKeywords(String targetJob, String summaryDetail) {
+        List<String> result = new ArrayList<>();
+
+        if (targetJob != null && !targetJob.isBlank()) {
+            result.add(targetJob);
+        }
+
+        if (summaryDetail != null && !summaryDetail.isBlank()) {
+            String[] tokens = summaryDetail
+                    .replaceAll("[^가-힣a-zA-Z0-9 ]", " ")
+                    .split("\\s+");
+
+            for (String t : tokens) {
+                if (t.length() >= 2 && result.size() < 3 && !result.contains(t)) {
+                    result.add(t);
+                }
+            }
+        }
+
+        if (result.isEmpty()) {
+            result.add("분석 완료");
+        }
+
+        return result.stream().limit(3).collect(Collectors.toList());
+    }
+
+    private List<String> extractExpectedQuestions(String expectedQuestionsJson) {
+        if (expectedQuestionsJson == null || expectedQuestionsJson.isBlank()) {
+            return List.of();
         }
 
         try {
-            // 2. 토큰에서 loginId 추출
-            String jwtToken = token.substring(7);
-            String loginId = jwtUtil.getLoginId(jwtToken);
+            JsonNode root = objectMapper.readTree(expectedQuestionsJson);
+            List<String> result = new ArrayList<>();
 
-            // 3. Member 조회 후 PK(userNum) 추출
-            Member member = memberService.findByLoginId(loginId);
-            if (member == null) {
-                return ResponseEntity.status(404).build();
-            }
-            Long userNum = member.getUserNum();
-
-            // 4. DB에서 내 분석 기록 전체 조회 (최신순)
-            List<AnalysisEntity> myAnalyses = analysisRepository.findAllByUserNumOrderByAnalyzedAtDesc(userNum);
-
-            // 5. 프론트엔드가 원하는 형태로 데이터 가공 및 분류
-            List<Map<String, Object>> resumeList = new ArrayList<>();
-            List<Map<String, Object>> coverLetterList = new ArrayList<>();
-            List<Map<String, Object>> portfolioList = new ArrayList<>();
-
-            for (AnalysisEntity entity : myAnalyses) {
-                Map<String, Object> dto = new HashMap<>();
-                dto.put("id", entity.getAnalysisId());
-
-                String displayDate = (entity.getAnalyzedAt() != null)
-                        ? entity.getAnalyzedAt().toString().substring(0, 10)
-                        : entity.getCreatedAt().toString().substring(0, 10);
-                dto.put("date", displayDate);
-
-                // 1. 점수 (overall_score 컬럼 사용)
-                Integer score = entity.getOverallScore();
-                dto.put("score", score != null ? score : 0); // 점수가 비어있으면 0점 처리
-
-                // 2. 제목 (target_job 컬럼을 활용해서 제목 만들기)
-                String job = entity.getTargetJob() != null ? entity.getTargetJob() : "미지정 직무";
-
-                if ("RESUME".equalsIgnoreCase(entity.getTargetType())) {
-                    dto.put("title", job + " 이력서 분석 리포트");
-                } else if ("ESSAY".equalsIgnoreCase(entity.getTargetType())) {
-                    dto.put("title", job + " 자기소개서 분석 리포트");
-                } else if ("PORTFOLIO".equalsIgnoreCase(entity.getTargetType())) {
-                    dto.put("title", job + " 포트폴리오 분석 리포트");
-                }
-
-                // 타겟 타입별로 리스트에 담기
-                if ("RESUME".equalsIgnoreCase(entity.getTargetType())) {
-                    resumeList.add(dto);
-                } else if ("ESSAY".equalsIgnoreCase(entity.getTargetType())) {
-                    coverLetterList.add(dto);
-                } else if ("PORTFOLIO".equalsIgnoreCase(entity.getTargetType())) {
-                    portfolioList.add(dto);
+            if (root.isArray()) {
+                for (JsonNode node : root) {
+                    String q = node.path("q").asText(null);
+                    if (q != null && !q.isBlank()) {
+                        result.add(q.trim());
+                    }
                 }
             }
 
-            // 6. 프론트엔드와 약속한 JSON 구조로 응답
-            Map<String, List<Map<String, Object>>> response = new HashMap<>();
-            response.put("resume", resumeList);
-            response.put("coverLetter", coverLetterList);
-            response.put("portfolio", portfolioList);
-
-            return ResponseEntity.ok(response);
-
+            return result;
         } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.status(401).build(); // 토큰 만료 등 에러 시 401 반환
+            return List.of();
         }
     }
 }

@@ -10,6 +10,14 @@ import com.careertalk.analysis.coverletter.entity.CiAnalysis;
 import com.careertalk.analysis.coverletter.entity.CiFileDocument;
 import com.careertalk.analysis.coverletter.entity.CiFileDocumentRepository;
 import com.careertalk.analysis.coverletter.repository.CiAnalysisRepository;
+import com.careertalk.analysis.coverletter.dto.*;
+import com.careertalk.analysis.coverletter.entity.CIEssay;
+import com.careertalk.analysis.coverletter.entity.CiAnalysis;
+import com.careertalk.analysis.coverletter.repository.CIEssayRepository;
+import com.careertalk.analysis.coverletter.repository.CiAnalysisRepository;
+import com.careertalk.auth.entity.Member;
+import com.careertalk.auth.jwt.JwtUtil;
+import com.careertalk.auth.service.MemberService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -32,11 +40,17 @@ import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
+@Transactional
 public class CiAnalysisService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final AnalysisRepository analysisRepository;
     private final CiFileDocumentRepository ciFileDocumentRepository; // 제목 찾기용
+    private final ObjectMapper objectMapper;
+    private final CIEssayRepository ciEssayRepository;
+    private final CiAnalysisRepository ciAnalysisRepository;
+    private final MemberService memberService;
+    private final JwtUtil jwtUtil;
 
     @Value("${ai.api-key}")
     private String apiKey;
@@ -44,7 +58,6 @@ public class CiAnalysisService {
     @Value("${ai.api-url}")
     private String apiUrl;
 
-    // 직군 별 전문성 키워드 맵
     private static final Map<String, List<String>> ROLE_KEYWORDS = Map.ofEntries(
             Map.entry("기획∙전략", List.of("전략", "로드맵", "OKR", "KPI", "PRD", "요구사항", "가설", "검증", "인사이트", "지표")),
             Map.entry("마케팅∙홍보∙조사", List.of("브랜딩", "캠페인", "SEO", "SEM", "ROAS", "CAC", "LTV", "전환", "리드", "GA4", "UTM")),
@@ -69,90 +82,126 @@ public class CiAnalysisService {
             Map.entry("공공∙복지", List.of("민원", "행정", "정책", "사업", "예산", "성과", "평가", "복지", "사례관리", "기관"))
     );
 
-    //분석
-    //분석
-    @Transactional
-    public CiAnalysisResponse analyzeFromText(CiAnalyzeTextRequest req) {
+    public CIAnalyzeResponse analyzeAndSave(
+            String authorizationHeader,
+            CIAnalyzeFormRequest request,
+            MultipartFile file
+    ) {
         try {
-            // 1. AI 분석 및 점수 계산
-            int ruleScore = calcRuleScore(req.getJobRole(), req.getJobDetail(), req.getTitle(), req.getContent());
-            JsonNode resultNode = callOpenAiAnalyze(req);
+            if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
+                throw new RuntimeException("인증 토큰이 없습니다.");
+            }
 
-            // 2. 팀원들과 동일하게 임시 유저 ID 1L 사용
-            Long currentUserId = 1L;
+            String jwtToken = authorizationHeader.substring(7);
+            String loginId = jwtUtil.getLoginId(jwtToken);
 
-            // 3. 점수와 피드백 데이터 뽑아내기
-            String strengths = resultNode.path("strengths").asText("-");
-            String weaknesses = resultNode.path("weaknesses").asText("-");
-            String feedback = resultNode.path("feedback").asText("-");
+            Member member = memberService.findByLoginId(loginId);
+            if (member == null) {
+                throw new RuntimeException("로그인 사용자를 찾을 수 없습니다.");
+            }
+
+            Long userNum = member.getUserNum();
+
+            String finalTitle = resolveTitle(request.getTitle(), file);
+            String finalContent = resolveContent(request.getContent(), file);
+            String targetJob = safe(request.getTargetJob());
+
+            if (finalContent.isBlank()) {
+                throw new RuntimeException("자기소개서 내용이 비어 있습니다.");
+            }
+
+            String sourceType = (file != null && !file.isEmpty()) ? "FILE" : "TEXT";
+
+            CIEssay essay = CIEssay.builder()
+                    .userNum(userNum)
+                    .title(finalTitle)
+                    .content(finalContent)
+                    .fileId(null)
+                    .sourceType(sourceType)
+                    .status("ANALYZED")
+                    .build();
+
+            essay = ciEssayRepository.save(essay);
+
+            int ruleScore = calcRuleScore(targetJob, "", finalTitle, finalContent);
+
+            JsonNode resultNode = callOpenAiAnalyze(finalTitle, finalContent, targetJob, "");
+
+            List<QuestionItem> questions = new ArrayList<>();
+            JsonNode qNode = resultNode.path("questions");
+
+            if (qNode.isArray()) {
+                for (JsonNode item : qNode) {
+                    String q = item.path("q").asText("");
+                    String intent = item.path("intent").asText("");
+                    questions.add(QuestionItem.builder()
+                            .q(q)
+                            .intent(intent)
+                            .build());
+                }
+            }
+
             int gptScoreRaw = resultNode.path("totalScore").asInt(0);
             int llmScore = clamp((int) Math.round(gptScoreRaw * 0.60), 0, 60);
             int totalScore = clamp(ruleScore + llmScore, 0, 100);
 
-            // 4. 강점/약점/피드백을 하나의 JSON으로 묶기
-            com.fasterxml.jackson.databind.node.ObjectNode scoreJsonNode = objectMapper.createObjectNode();
-            scoreJsonNode.put("strengths", strengths);
-            scoreJsonNode.put("weaknesses", weaknesses);
-            scoreJsonNode.put("feedback", feedback);
-            scoreJsonNode.put("ruleScore", ruleScore);
-            scoreJsonNode.put("llmScore", llmScore);
-            String scoreJsonStr = scoreJsonNode.toString();
+            String strengths = resultNode.path("strengths").asText("");
+            String weaknesses = resultNode.path("weaknesses").asText("");
+            String feedback = resultNode.path("feedback").asText("");
 
-            // 5. DB에 진짜로 저장 (원본 텍스트는 안 쓰는 summaryDetail 칸에 몰래 쏙!)
-            AnalysisEntity analysisEntity = AnalysisEntity.builder()
-                    .userNum(currentUserId)
-                    .targetType("COVERLETTER")
-                    .targetId(0L) // 자소서 전용 테이블이 없으므로 일단 0을 넣습니다
-                    .targetJob(req.getJobRole())
+            Map<String, Object> scoreMap = new LinkedHashMap<>();
+            scoreMap.put("ruleScore", ruleScore);
+            scoreMap.put("llmScore", llmScore);
+            scoreMap.put("totalScore", totalScore);
+
+            Map<String, Object> ruleResultMap = new LinkedHashMap<>();
+            ruleResultMap.put("paragraphs", countParagraphs(finalContent));
+            ruleResultMap.put("numbers", countNumbers(finalContent));
+            ruleResultMap.put("keywordHits", countRoleKeywords(finalContent, targetJob));
+
+            CiAnalysis analysis = CiAnalysis.builder()
+                    .userNum(userNum)
+                    .targetType("ESSAY")
+                    .targetId(essay.getEssayId())
+                    .targetJob(targetJob)
                     .overallScore(totalScore)
-                    .scoreJson(scoreJsonStr)
-                    .summaryDetail(req.getContent()) // 원본 텍스트를 저장하는 핵심
+                    .scoreJson(objectMapper.writeValueAsString(scoreMap))
+                    .ruleResultJson(objectMapper.writeValueAsString(ruleResultMap))
+                    .oneLineReview(strengths)
+                    .summaryDetail(feedback)
+                    .expectedQuestionsJson(objectMapper.writeValueAsString(questions))
+                    .modelName("gpt-4.1")
+                    .modelVersion("v1")
+                    .promptVersion("ci-analysis-v1")
                     .status("SUCCESS")
+                    .errorMessage(null)
                     .analyzedAt(LocalDateTime.now())
                     .build();
-            analysisEntity = analysisRepository.save(analysisEntity);
 
-            // 6. 가짜 ID 대신 "진짜 발급된 DB ID"를 넘겨줍니다.
-            return toResponse(req, resultNode, ruleScore, analysisEntity.getAnalysisId());
+            analysis = ciAnalysisRepository.save(analysis);
+
+            return CIAnalyzeResponse.builder()
+                    .analysisId(analysis.getAnalysisId())
+                    .essayId(essay.getEssayId())
+                    .title(essay.getTitle())
+                    .content(essay.getContent())
+                    .ruleScore(ruleScore)
+                    .llmScore(llmScore)
+                    .totalScore(totalScore)
+                    .strengths(strengths)
+                    .weaknesses(weaknesses)
+                    .feedback(feedback)
+                    .questions(questions)
+                    .updatedAt(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
+                    .jobRole(targetJob)
+                    .jobDetail("")
+                    .build();
 
         } catch (Exception e) {
-            throw new RuntimeException("분석 및 저장 실패: " + e.getMessage(), e);
+            throw new RuntimeException("분석 실패: " + e.getMessage(), e);
         }
     }
 
-//    @Transactional
-//    public CiAnalysisResponse analyzeFromText(CiAnalyzeTextRequest req) {
-//        try {
-//            int ruleScore = calcRuleScore(req.getJobRole(), req.getJobDetail(), req.getTitle(), req.getContent());
-//            JsonNode resultNode = callOpenAiAnalyze(req);
-//            return toResponse(req, resultNode, ruleScore);
-//        } catch (Exception e) {
-//            throw new RuntimeException("분석 실패: " + e.getMessage(), e);
-//        }
-//    }
-
-    public CiAnalysisResponse analyzeFromPdf(MultipartFile file, String jobRole, String jobDetail) {
-        validatePdf(file);
-
-        try {
-            String extracted = extractTextFromPdf(file);
-            if (extracted == null) extracted = "";
-            extracted = extracted.trim();
-            extracted = limitLength(extracted, 12000);
-
-            CiAnalyzeTextRequest req = new CiAnalyzeTextRequest();
-            req.setJobRole(jobRole);
-            req.setJobDetail(jobDetail);
-            req.setTitle(safe(file.getOriginalFilename()));
-            req.setContent(extracted.isBlank() ? "(PDF에서 텍스트를 추출하지 못했습니다.)" : extracted);
-
-            return analyzeFromText(req);
-        } catch (Exception e) {
-            throw new RuntimeException("PDF 분석 실패: " + e.getMessage(), e);
-        }
-    }
-
-   //ai 개선본 재분석을 통해 목표점수 도출
     public CiRewriteResponse rewriteFromText(CiRewriteRequest req) {
         try {
             final int TARGET = 90;
@@ -168,54 +217,37 @@ public class CiAnalysisService {
                 String rewrittenEssay = safe(last.getRewrittenEssay()).trim();
                 if (rewrittenEssay.isBlank()) break;
 
-                //개선본을 다시 분석하여 점수 확인
-                CiAnalyzeTextRequest analyzeReq = new CiAnalyzeTextRequest();
-                analyzeReq.setJobRole(req.getJobRole());
-                analyzeReq.setJobDetail(req.getJobDetail());
-                analyzeReq.setTitle(req.getTitle());
-                analyzeReq.setContent(rewrittenEssay);
+                JsonNode analyzed = callOpenAiAnalyze(
+                        safe(req.getTitle()),
+                        rewrittenEssay,
+                        safe(req.getJobRole()),
+                        safe(req.getJobDetail())
+                );
 
-                JsonNode analyzed = callOpenAiAnalyze(analyzeReq);
                 int score = analyzed.path("totalScore").asInt(0);
 
                 if (score >= TARGET) {
-                    // 점수 충분하면 종료
                     return last;
                 }
 
-                // 목표치보다 낮으면 약점 피드백 활용하여 다시 재작성
                 String weaknesses = analyzed.path("weaknesses").asText("");
                 String feedback = analyzed.path("feedback").asText("");
 
                 currentPrompt = buildRewritePromptWithHint(req, score, weaknesses, feedback);
             }
 
-            // 마지막 결과라도 리턴
-            return last != null ? last : CiRewriteResponse.builder().rewrittenEssay("").changeSummary(List.of()).build();
+            return last != null
+                    ? last
+                    : CiRewriteResponse.builder().rewrittenEssay("").changeSummary(List.of()).build();
+
         } catch (Exception e) {
             throw new RuntimeException("AI 개선본 생성 실패: " + e.getMessage(), e);
         }
     }
 
-    private String buildRewritePromptWithHint(CiRewriteRequest req, int score, String weaknesses, String feedback) throws IOException {
-        String base = buildRewritePrompt(req);
-        return base +
-                "\n\n[직전 평가 결과]\n" +
-                "- 점수: " + score + "\n" +
-                "- 약점: " + safe(weaknesses) + "\n" +
-                "- 피드백: " + safe(feedback) + "\n\n" +
-                "위 약점/피드백을 반드시 반영해서 점수를 올려 다시 작성하라.\n" +
-                "특히 수치/성과(최소 3개), STAR 구조, 직무 키워드 삽입, 차별성 1~2문장을 강화하라.\n";
-    }
-
-    //openai 호출
-    private JsonNode callOpenAiAnalyze(CiAnalyzeTextRequest req) throws IOException {
-        String prompt = buildAnalyzePrompt(req);
-        JsonNode raw = callOpenAiRaw(prompt);
-
-        // raw는 “모델 응답 JSON 문자열”을 다시 parse한 결과여야 함
-        // -> callOpenAiRaw는 내부에서 content.text 를 꺼내서 JSON parse까지 해줌
-        return raw;
+    private JsonNode callOpenAiAnalyze(String title, String content, String jobRole, String jobDetail) throws IOException {
+        String prompt = buildAnalyzePrompt(title, content, jobRole, jobDetail);
+        return callOpenAiRaw(prompt);
     }
 
     private JsonNode callOpenAiRaw(String prompt) throws IOException {
@@ -234,7 +266,6 @@ public class CiAnalysisService {
         headers.setBearerAuth(apiKey);
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
-
         ResponseEntity<String> response = restTemplate.postForEntity(apiUrl, entity, String.class);
 
         String responseBody = response.getBody();
@@ -245,7 +276,7 @@ public class CiAnalysisService {
         JsonNode root = objectMapper.readTree(responseBody);
 
         if (root.has("error") && !root.get("error").isNull()) {
-            throw new RuntimeException("OpenAI ERROR: " + root.get("error").toString());
+            throw new RuntimeException("OpenAI ERROR: " + root.get("error"));
         }
 
         JsonNode outputNode = root.path("output");
@@ -263,20 +294,18 @@ public class CiAnalysisService {
             throw new RuntimeException("GPT 응답 텍스트가 비어있습니다.");
         }
 
-        //모델이 JSON만 출력해야하기에 JSON parse
         return objectMapper.readTree(outputText);
     }
 
-    //프롬프트 로드
-    private String buildAnalyzePrompt(CiAnalyzeTextRequest req) throws IOException {
+    private String buildAnalyzePrompt(String title, String content, String jobRole, String jobDetail) throws IOException {
         ClassPathResource resource = new ClassPathResource("prompts/ci-analysis.txt");
         String template = new String(resource.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 
         return template
-                .replace("{{jobRole}}", safe(req.getJobRole()))
-                .replace("{{jobDetail}}", safe(req.getJobDetail()))
-                .replace("{{title}}", safe(req.getTitle()))
-                .replace("{{content}}", safe(req.getContent()));
+                .replace("{{jobRole}}", safe(jobRole))
+                .replace("{{jobDetail}}", safe(jobDetail))
+                .replace("{{title}}", safe(title))
+                .replace("{{content}}", safe(content));
     }
 
     private String buildRewritePrompt(CiRewriteRequest req) throws IOException {
@@ -290,47 +319,15 @@ public class CiAnalysisService {
                 .replace("{{content}}", safe(req.getContent()));
     }
 
-    private String safe(String value) {
-        return value == null ? "" : value;
-    }
-
-    //응답 맵핑
-    private CiAnalysisResponse toResponse(CiAnalyzeTextRequest req, JsonNode result, int ruleScore, Long realAnalysisId) {
-        List<String> questions = new ArrayList<>();
-        JsonNode qNode = result.path("questions");
-        if (qNode.isArray()) {
-            for (JsonNode q : qNode) questions.add(q.asText());
-        }
-
-        List<String> intents = new ArrayList<>();
-        JsonNode iNode = result.path("questionIntents");
-        if (iNode.isArray()) {
-            for (JsonNode it : iNode) intents.add(it.asText());
-        }
-
-        while (intents.size() < questions.size()) intents.add("");
-        if (intents.size() > questions.size()) intents = intents.subList(0, questions.size());
-
-        int gptScoreRaw = result.path("totalScore").asInt(0);
-        int llmScore = clamp((int) Math.round(gptScoreRaw * 0.60), 0, 60);
-        int totalScore = clamp(ruleScore + llmScore, 0, 100);
-
-        return CiAnalysisResponse.builder()
-                .analysisId(realAnalysisId)
-                .jobRole(req.getJobRole())
-                .jobDetail(req.getJobDetail())
-                .title(req.getTitle())
-                .content(req.getContent())
-                .ruleScore(ruleScore)
-                .llmScore(llmScore)
-                .totalScore(totalScore)
-                .strengths(result.path("strengths").asText(""))
-                .weaknesses(result.path("weaknesses").asText(""))
-                .feedback(result.path("feedback").asText(""))
-                .questions(questions)
-                .questionIntents(intents)
-                .updatedAt(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")))
-                .build();
+    private String buildRewritePromptWithHint(CiRewriteRequest req, int score, String weaknesses, String feedback) throws IOException {
+        String base = buildRewritePrompt(req);
+        return base +
+                "\n\n[직전 평가 결과]\n" +
+                "- 점수: " + score + "\n" +
+                "- 약점: " + safe(weaknesses) + "\n" +
+                "- 피드백: " + safe(feedback) + "\n\n" +
+                "위 약점/피드백을 반드시 반영해서 점수를 올려 다시 작성하라.\n" +
+                "특히 수치/성과(최소 3개), STAR 구조, 직무 키워드 삽입, 차별성 1~2문장을 강화하라.\n";
     }
 
     private CiRewriteResponse toRewriteResponse(JsonNode result) {
@@ -348,7 +345,34 @@ public class CiAnalysisService {
                 .build();
     }
 
-    // 룰 구조점수 40점 맥스
+    private String resolveTitle(String title, MultipartFile file) {
+        if (title != null && !title.isBlank()) return title.trim();
+        if (file != null && !file.isEmpty() && file.getOriginalFilename() != null) {
+            return file.getOriginalFilename().replaceAll("\\.pdf$", "");
+        }
+        return "자기소개서";
+    }
+
+    private String resolveContent(String content, MultipartFile file) throws IOException {
+        if (content != null && !content.isBlank()) {
+            return limitLength(content.trim(), 12000);
+        }
+
+        validatePdf(file);
+        String extracted = extractTextFromPdf(file);
+        extracted = extracted == null ? "" : extracted.trim();
+        extracted = limitLength(extracted, 12000);
+
+        if (extracted.isBlank()) {
+            return "(PDF에서 텍스트를 추출하지 못했습니다.)";
+        }
+        return extracted;
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value;
+    }
+
     private int calcRuleScore(String jobRole, String jobDetail, String title, String content) {
         String t = safe(title).trim();
         String c = safe(content).trim();
@@ -466,7 +490,7 @@ public class CiAnalysisService {
         }
         return hit;
     }
-    //pdf
+
     private void validatePdf(MultipartFile file) {
         if (file == null || file.isEmpty()) throw new RuntimeException("PDF 파일이 비어있습니다.");
 

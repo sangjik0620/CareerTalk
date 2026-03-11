@@ -1,13 +1,11 @@
 package com.careertalk.analysis.portfolio.dto;
 
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Getter;
-import lombok.NoArgsConstructor;
+import lombok.*;
 
 import java.util.List;
 
 @Getter
+@Setter
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
@@ -19,14 +17,13 @@ public class PortfolioAnalysisResponse {
     private Integer overallScore;
     private String oneLineReview;
     private String summaryDetail;
+    private String nickname;
 
     private List<ChartDataDto> chartData;
 
     private List<QuestionDto> questions;
 
-    /*
-      레이더 차트용 데이터
-     */
+    /* 레이더 차트용 데이터 */
     @Getter
     @Builder
     @NoArgsConstructor
@@ -37,9 +34,7 @@ public class PortfolioAnalysisResponse {
         private int fullMark;    // 만점 기준 (보통 100)
     }
 
-    /*
-      예상 면접 질문 및 질문 의도
-     */
+    /* 예상 면접 질문 및 질문 의도 */
     @Getter
     @Builder
     @NoArgsConstructor

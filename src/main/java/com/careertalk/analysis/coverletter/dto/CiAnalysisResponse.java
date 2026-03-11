@@ -24,8 +24,7 @@ public class CiAnalysisResponse {
     private String weaknesses;
     private String feedback;
 
-    private List<String> questions;
-    private List<String> questionIntents;
+    private List<QuestionItem> questions;
 
     private String updatedAt;
 }

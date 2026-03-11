@@ -16,6 +16,7 @@ import com.careertalk.interview.service.InterviewResultService;
 import com.careertalk.interview.service.InterviewService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -33,8 +34,8 @@ import java.util.Map;
 public class InterviewController {
 
     private final InterviewService interviewService;
-    private final InterviewEvaluationService evaluationService;   // ✅ 여기 하나로 통일
-    private final InterviewResultService interviewResultService;  // ✅ A안(V2) 결과 생성
+    private final InterviewEvaluationService evaluationService;
+    private final InterviewResultService interviewResultService;
     private final InterviewAnalysisWorker interviewAnalysisWorker;
     private final InterviewEvaluationRepository evaluationRepository;
 
@@ -44,6 +45,7 @@ public class InterviewController {
 
     @PostMapping("/upload")
     public ResponseEntity<?> uploadInterview(
+            @RequestHeader(value = "Authorization", required = false) String token,
             @RequestParam("files") List<MultipartFile> files,
             @RequestParam("questions") List<String> questions,
             @RequestParam("durationSec") int durationSec,
@@ -51,7 +53,28 @@ public class InterviewController {
             @RequestParam(value = "targetsJson", required = false) String targetsJson
     ) throws IOException {
 
-        Long userId = 1L;
+        if (token == null || !token.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "로그인이 필요합니다."));
+        }
+
+        String jwtToken = token.substring(7);
+        String loginId;
+
+        try {
+            loginId = jwtUtil.getLoginId(jwtToken);
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "유효하지 않은 토큰입니다."));
+        }
+
+        Member member = memberService.findByLoginId(loginId);
+        if (member == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", "사용자를 찾을 수 없습니다."));
+        }
+
+        Long userNum = member.getUserNum();
 
         List<SessionTargetRequest> targets = java.util.Collections.emptyList();
         if (targetsJson != null && !targetsJson.isBlank()) {
@@ -61,19 +84,23 @@ public class InterviewController {
         }
 
         Long sessionId = interviewService.saveInterviewVoice(
-                userId, files, questions, durationSec, questionCount
+                userNum, files, questions, durationSec, questionCount
         );
 
         interviewService.saveSessionTargets(sessionId, targets);
 
-        return ResponseEntity.ok(Map.of("sessionId", sessionId, "message", "업로드 성공"));
+        return ResponseEntity.ok(Map.of(
+                "sessionId", sessionId,
+                "userNum", userNum,
+                "message", "업로드 성공"
+        ));
     }
 
     @GetMapping("/sessions/{sessionId}/result")
     public ResponseEntity<?> result(@PathVariable Long sessionId) {
-
         String status = evaluationService.getAnalysisStatus(sessionId);
         log.info("status : {}", status);
+
         if (!"DONE".equalsIgnoreCase(status)) {
             return ResponseEntity.status(202).body(Map.of(
                     "message", "analysis not ready",
@@ -88,36 +115,26 @@ public class InterviewController {
 
     @PostMapping("/sessions/{sessionId}/analyze")
     public ResponseEntity<?> analyze(@PathVariable Long sessionId) {
-        System.out.println("[ANALYZE] request start sessionId=" + sessionId);
-
-        // 0) evaluation row 없으면 먼저 생성
         evaluationRepository.findBySessionId(sessionId)
                 .orElseGet(() -> {
                     InterviewEvaluation eval = new InterviewEvaluation();
                     eval.setSessionId(sessionId);
-                    eval.setOverallScore(0); // DB default 있어도 명시해주면 안전
+                    eval.setOverallScore(0);
                     eval.setAnalysisStatus(AnalysisStatus.PENDING);
                     return evaluationRepository.save(eval);
                 });
 
-        // 1) PROCESSING 선점
         int updated = evaluationRepository.markProcessingIfPossible(sessionId);
-        System.out.println("[ANALYZE] markProcessingIfPossible updated=" + updated);
 
-        // 2) 선점 성공 시에만 워커 실행
         if (updated == 1) {
-            System.out.println("[ANALYZE] worker start sessionId=" + sessionId);
             interviewAnalysisWorker.runAsync(sessionId);
-
             return ResponseEntity.accepted().body(Map.of(
                     "sessionId", sessionId,
                     "status", "PROCESSING"
             ));
         }
 
-        // 3) 이미 진행중/완료된 경우 현재 상태 반환
         String status = evaluationRepository.findAnalysisStatusBySessionId(sessionId);
-        System.out.println("[ANALYZE] existing status=" + status);
 
         return ResponseEntity.ok().body(Map.of(
                 "sessionId", sessionId,
@@ -128,7 +145,6 @@ public class InterviewController {
     @GetMapping("/sessions/{sessionId}/analysis/status")
     public ResponseEntity<?> analysisStatus(@PathVariable Long sessionId) {
         String status = evaluationService.getAnalysisStatus(sessionId);
-        System.out.println("[STATUS API] sessionId=" + sessionId);
         return ResponseEntity.ok(Map.of(
                 "sessionId", sessionId,
                 "status", status
