@@ -22,6 +22,10 @@ import lombok.Setter;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import com.careertalk.auth.entity.Member;
+import com.careertalk.auth.jwt.JwtUtil;
+import com.careertalk.auth.service.MemberService;
+
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -33,6 +37,7 @@ public class AnalysisQueryController {
 
     private final AnalysisRepository analysisRepository;
     private final JwtUtil jwtUtil;
+    private final MemberService memberService;
     private final MemberRepository memberRepository;
     private final ResumeRepository resumeRepository;
     private final PortfolioRepository portfolioRepository;

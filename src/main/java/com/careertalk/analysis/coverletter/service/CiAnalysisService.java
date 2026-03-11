@@ -1,5 +1,15 @@
 package com.careertalk.analysis.coverletter.service;
 
+import com.careertalk.analysis.common.entity.AnalysisEntity;
+import com.careertalk.analysis.common.repository.AnalysisRepository;
+import com.careertalk.analysis.coverletter.dto.CiAnalyzeTextRequest;
+import com.careertalk.analysis.coverletter.dto.CiAnalysisResponse;
+import com.careertalk.analysis.coverletter.dto.CiRewriteRequest;
+import com.careertalk.analysis.coverletter.dto.CiRewriteResponse;
+import com.careertalk.analysis.coverletter.entity.CiAnalysis;
+import com.careertalk.analysis.coverletter.entity.CiFileDocument;
+import com.careertalk.analysis.coverletter.entity.CiFileDocumentRepository;
+import com.careertalk.analysis.coverletter.repository.CiAnalysisRepository;
 import com.careertalk.analysis.coverletter.dto.*;
 import com.careertalk.analysis.coverletter.entity.CIEssay;
 import com.careertalk.analysis.coverletter.entity.CiAnalysis;
@@ -33,6 +43,9 @@ import java.util.regex.Pattern;
 @Transactional
 public class CiAnalysisService {
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AnalysisRepository analysisRepository;
+    private final CiFileDocumentRepository ciFileDocumentRepository; // 제목 찾기용
     private final ObjectMapper objectMapper;
     private final CIEssayRepository ciEssayRepository;
     private final CiAnalysisRepository ciAnalysisRepository;
@@ -507,5 +520,62 @@ public class CiAnalysisService {
 
     private int clamp(int v, int min, int max) {
         return Math.max(min, Math.min(max, v));
+    }
+
+    // 마이페이지 상세 조회를 위한 메서드 추가
+    @Transactional(readOnly = true)
+    public CiAnalysisResponse getAnalysisResult(Long analysisId) {
+
+        AnalysisEntity entity = analysisRepository.findById(analysisId)
+                .orElseThrow(() -> new RuntimeException("해당 분석 결과가 없습니다. ID: " + analysisId));
+
+        // 1. JSON에서 점수/피드백 꺼내기
+        String strengths = "-";
+        String weaknesses = "-";
+        String feedback = "-";
+        int ruleScore = 0;
+        int llmScore = 0;
+
+        try {
+            if (entity.getScoreJson() != null && !entity.getScoreJson().isBlank()) {
+                JsonNode scoreNode = objectMapper.readTree(entity.getScoreJson());
+                strengths = scoreNode.path("strengths").asText("-");
+                weaknesses = scoreNode.path("weaknesses").asText("-");
+                feedback = scoreNode.path("feedback").asText("-");
+                ruleScore = scoreNode.path("ruleScore").asInt(0);
+                llmScore = scoreNode.path("llmScore").asInt(0);
+            }
+        } catch (Exception e) {
+            System.err.println("JSON 파싱 에러 발생: " + e.getMessage());
+        }
+
+        // 2. 파일 이름(제목) 꺼내기
+        String displayTitle = "자기소개서 분석 결과";
+        if ("FILE".equalsIgnoreCase(entity.getTargetType()) && entity.getTargetId() != null) {
+            displayTitle = ciFileDocumentRepository.findById(entity.getTargetId())
+                    .map(CiFileDocument::getOriginalName)
+                    .orElse("첨부파일 분석 리포트");
+        }
+
+        // 🌟 3. 핵심: 원본 텍스트는 공용 테이블의 summaryDetail 칸에서 꺼내옵니다! (파일 생성 X)
+        String contentText = (entity.getSummaryDetail() != null && !entity.getSummaryDetail().isBlank())
+                ? entity.getSummaryDetail()
+                : "DB에 원본 텍스트가 저장되어 있지 않습니다. (저장할 때 summaryDetail에 내용을 넣어주세요!)";
+
+        // 4. 프론트로 보낼 데이터 조립
+        return CiAnalysisResponse.builder()
+                .analysisId(entity.getAnalysisId())
+                .jobRole(entity.getTargetJob())
+                .title(displayTitle)
+                .totalScore(entity.getOverallScore() != null ? entity.getOverallScore() : 0)
+                .ruleScore(ruleScore)
+                .llmScore(llmScore)
+                .strengths(strengths)
+                .weaknesses(weaknesses)
+                .feedback(feedback)
+                .content(contentText) // 🌟 재사용한 칸에서 꺼낸 텍스트를 쏙!
+                .updatedAt(entity.getAnalyzedAt() != null ?
+                        entity.getAnalyzedAt().toString() : entity.getCreatedAt().toString())
+                .build();
     }
 }

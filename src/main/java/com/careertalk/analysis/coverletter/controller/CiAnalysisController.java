@@ -47,4 +47,10 @@ public class CiAnalysisController {
             return ResponseEntity.badRequest().body("개선본 생성 실패: " + e.getMessage());
         }
     }
+
+    // 마이페이지에서 상세 결과를 보기 위한 GET API
+    @GetMapping("/result/{analysisId}")
+    public CiAnalysisResponse getAnalysisResult(@PathVariable Long analysisId) {
+        return ciAnalysisService.getAnalysisResult(analysisId);
+    }
 }
