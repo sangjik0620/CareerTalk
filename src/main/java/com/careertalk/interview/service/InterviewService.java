@@ -5,9 +5,11 @@ import com.careertalk.file.repository.FileRepository;
 import com.careertalk.file.s3.S3PresignedUrlService;
 import com.careertalk.file.s3.S3Uploader;
 import com.careertalk.interview.dto.InterviewSessionResultResponse;
+import com.careertalk.interview.entity.InterviewEvaluation;
 import com.careertalk.interview.entity.InterviewSession;
 import com.careertalk.interview.entity.InterviewSessionTarget;
 import com.careertalk.interview.entity.InterviewTurn;
+import com.careertalk.interview.repository.InterviewEvaluationRepository;
 import com.careertalk.interview.repository.InterviewSessionRepository;
 import com.careertalk.interview.repository.InterviewSessionTargetRepository;
 import com.careertalk.interview.repository.InterviewTurnRepository;
@@ -32,7 +34,7 @@ public class InterviewService {
     private final S3Uploader s3Uploader;
     private final S3PresignedUrlService presignedUrlService;
     private final InterviewSessionTargetRepository sessionTargetRepository;
-
+    private final InterviewEvaluationRepository evaluationRepository;
 
     @Transactional
     public Long saveInterviewVoice(
@@ -103,13 +105,22 @@ public class InterviewService {
     }
 
     @Transactional(readOnly = true)
-    public InterviewSessionResultResponse getVoiceResult(Long sessionId) {
+    public InterviewSessionResultResponse getVoiceResult(Long sessionId, Long userNum) {
+        // 1) 세션 확인 및 본인 여부 검증
         InterviewSession session = sessionRepository.findById(sessionId)
-                .orElseThrow(() -> new IllegalArgumentException("session not found"));
+                .orElseThrow(() -> new IllegalArgumentException("세션을 찾을 수 없습니다."));
+
+        if (!session.getUserNum().equals(userNum)) {
+            throw new RuntimeException("해당 면접 기록에 접근할 권한이 없습니다.");
+        }
+
+        // 2) AI 평가 결과 조회
+        InterviewEvaluation evaluation = evaluationRepository.findBySessionId(sessionId)
+                .orElse(null); // 아직 분석 전일 수 있으므로 null 허용
 
         List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
 
-        // 1) fileId들 모아서 한번에 조회
+        // 3) 음성 파일 조회를 위한 ID 추출
         List<Long> fileIds = turns.stream()
                 .map(InterviewTurn::getAnswerAudioFileId)
                 .filter(id -> id != null)
@@ -117,42 +128,37 @@ public class InterviewService {
                 .sorted()
                 .toList();
 
-        // 2) files 한 번에 로딩 → Map으로 변환
         java.util.Map<Long, FileEntity> fileMap = fileIds.isEmpty()
                 ? java.util.Map.of()
                 : fileRepository.findAllById(fileIds).stream()
                 .collect(java.util.stream.Collectors.toMap(FileEntity::getFileId, f -> f));
 
-        // 3) 응답 만들기 (presigned는 여기서만 발급)
+        // 4) 응답용 아이템 리스트 생성
         List<InterviewSessionResultResponse.TurnItem> items = turns.stream().map(t -> {
             String url = null;
-
             Long fid = t.getAnswerAudioFileId();
             if (fid != null) {
                 FileEntity f = fileMap.get(fid);
-                if (f != null && "ACTIVE".equals(f.getStatus())) { // 소프트삭제 대응 (추천)
-                    url = presignedUrlService.presignGetUrl(
-                            f.getS3Bucket(),
-                            f.getS3Key(),
-                            java.time.Duration.ofMinutes(10)
-                    );
+                if (f != null && "ACTIVE".equals(f.getStatus())) {
+                    url = presignedUrlService.presignGetUrl(f.getS3Bucket(), f.getS3Key(), java.time.Duration.ofMinutes(10));
                 }
             }
-
-            return new InterviewSessionResultResponse.TurnItem(
-                    t.getTurnNo(),
-                    t.getAiQuestion(),
-                    url
-            );
+            return new InterviewSessionResultResponse.TurnItem(t.getTurnNo(), t.getAiQuestion(), url);
         }).toList();
 
-        return new InterviewSessionResultResponse(
-                session.getSessionId(),
-                session.getTitle(),
-                session.getStatus(),
-                session.getMode(),
-                items
-        );
+        // 5) 모든 데이터를 합친 최종 응답 반환
+        return InterviewSessionResultResponse.builder()
+                .sessionId(session.getSessionId())
+                .title(session.getTitle())
+                .status(session.getStatus())
+                .mode(session.getMode())
+                // Evaluation 데이터 매핑
+                .overallScore(evaluation != null ? evaluation.getOverallScore() : 0)
+                .strengths(evaluation != null ? evaluation.getStrengths() : "분석 데이터가 없습니다.")
+                .weaknesses(evaluation != null ? evaluation.getWeaknesses() : "-")
+                .nextActions(evaluation != null ? evaluation.getNextActions() : "-")
+                .turns(items)
+                .build();
     }
 
     @Transactional
