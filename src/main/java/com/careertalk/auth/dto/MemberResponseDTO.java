@@ -15,20 +15,17 @@ public class MemberResponseDTO {
     private String email;
     private String nickname;
     private String name;
-    private String phone;      // ⭐ 추가: 전화번호
-    private String targetJob;  // ⭐ 추가: 목표 직무
+    private String phone;
+    private String targetJob;
 
-    /**
-     * Entity를 DTO로 변환하는 정적 팩토리 메서드
-     */
     public static MemberResponseDTO from(Member member) {
         return MemberResponseDTO.builder()
                 .loginId(member.getLoginId())
                 .email(member.getEmail())
                 .nickname(member.getNickname())
                 .name(member.getName())
-                .phone(member.getPhone())      // ⭐ 추가
-                .targetJob(member.getTargetJob()) // ⭐ 추가
+                .phone(member.getPhone())
+                .targetJob(member.getTargetJob())
                 .build();
     }
 }

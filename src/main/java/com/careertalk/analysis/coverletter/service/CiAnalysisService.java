@@ -1,9 +1,15 @@
 package com.careertalk.analysis.coverletter.service;
 
+import com.careertalk.analysis.common.entity.AnalysisEntity;
+import com.careertalk.analysis.common.repository.AnalysisRepository;
 import com.careertalk.analysis.coverletter.dto.CiAnalyzeTextRequest;
 import com.careertalk.analysis.coverletter.dto.CiAnalysisResponse;
 import com.careertalk.analysis.coverletter.dto.CiRewriteRequest;
 import com.careertalk.analysis.coverletter.dto.CiRewriteResponse;
+import com.careertalk.analysis.coverletter.entity.CiAnalysis;
+import com.careertalk.analysis.coverletter.entity.CiFileDocument;
+import com.careertalk.analysis.coverletter.entity.CiFileDocumentRepository;
+import com.careertalk.analysis.coverletter.repository.CiAnalysisRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +19,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -28,6 +35,8 @@ import java.util.regex.Pattern;
 public class CiAnalysisService {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final AnalysisRepository analysisRepository;
+    private final CiFileDocumentRepository ciFileDocumentRepository; // 제목 찾기용
 
     @Value("${ai.api-key}")
     private String apiKey;
@@ -61,15 +70,66 @@ public class CiAnalysisService {
     );
 
     //분석
+    //분석
+    @Transactional
     public CiAnalysisResponse analyzeFromText(CiAnalyzeTextRequest req) {
         try {
+            // 1. AI 분석 및 점수 계산
             int ruleScore = calcRuleScore(req.getJobRole(), req.getJobDetail(), req.getTitle(), req.getContent());
             JsonNode resultNode = callOpenAiAnalyze(req);
-            return toResponse(req, resultNode, ruleScore);
+
+            // 2. 팀원들과 동일하게 임시 유저 ID 1L 사용
+            Long currentUserId = 1L;
+
+            // 3. 점수와 피드백 데이터 뽑아내기
+            String strengths = resultNode.path("strengths").asText("-");
+            String weaknesses = resultNode.path("weaknesses").asText("-");
+            String feedback = resultNode.path("feedback").asText("-");
+            int gptScoreRaw = resultNode.path("totalScore").asInt(0);
+            int llmScore = clamp((int) Math.round(gptScoreRaw * 0.60), 0, 60);
+            int totalScore = clamp(ruleScore + llmScore, 0, 100);
+
+            // 4. 강점/약점/피드백을 하나의 JSON으로 묶기
+            com.fasterxml.jackson.databind.node.ObjectNode scoreJsonNode = objectMapper.createObjectNode();
+            scoreJsonNode.put("strengths", strengths);
+            scoreJsonNode.put("weaknesses", weaknesses);
+            scoreJsonNode.put("feedback", feedback);
+            scoreJsonNode.put("ruleScore", ruleScore);
+            scoreJsonNode.put("llmScore", llmScore);
+            String scoreJsonStr = scoreJsonNode.toString();
+
+            // 5. DB에 진짜로 저장 (원본 텍스트는 안 쓰는 summaryDetail 칸에 몰래 쏙!)
+            AnalysisEntity analysisEntity = AnalysisEntity.builder()
+                    .userNum(currentUserId)
+                    .targetType("COVERLETTER")
+                    .targetId(0L) // 자소서 전용 테이블이 없으므로 일단 0을 넣습니다
+                    .targetJob(req.getJobRole())
+                    .overallScore(totalScore)
+                    .scoreJson(scoreJsonStr)
+                    .summaryDetail(req.getContent()) // 원본 텍스트를 저장하는 핵심
+                    .status("SUCCESS")
+                    .analyzedAt(LocalDateTime.now())
+                    .build();
+            analysisEntity = analysisRepository.save(analysisEntity);
+
+            // 6. 가짜 ID 대신 "진짜 발급된 DB ID"를 넘겨줍니다.
+            return toResponse(req, resultNode, ruleScore, analysisEntity.getAnalysisId());
+
         } catch (Exception e) {
-            throw new RuntimeException("분석 실패: " + e.getMessage(), e);
+            throw new RuntimeException("분석 및 저장 실패: " + e.getMessage(), e);
         }
     }
+
+//    @Transactional
+//    public CiAnalysisResponse analyzeFromText(CiAnalyzeTextRequest req) {
+//        try {
+//            int ruleScore = calcRuleScore(req.getJobRole(), req.getJobDetail(), req.getTitle(), req.getContent());
+//            JsonNode resultNode = callOpenAiAnalyze(req);
+//            return toResponse(req, resultNode, ruleScore);
+//        } catch (Exception e) {
+//            throw new RuntimeException("분석 실패: " + e.getMessage(), e);
+//        }
+//    }
 
     public CiAnalysisResponse analyzeFromPdf(MultipartFile file, String jobRole, String jobDetail) {
         validatePdf(file);
@@ -235,7 +295,7 @@ public class CiAnalysisService {
     }
 
     //응답 맵핑
-    private CiAnalysisResponse toResponse(CiAnalyzeTextRequest req, JsonNode result, int ruleScore) {
+    private CiAnalysisResponse toResponse(CiAnalyzeTextRequest req, JsonNode result, int ruleScore, Long realAnalysisId) {
         List<String> questions = new ArrayList<>();
         JsonNode qNode = result.path("questions");
         if (qNode.isArray()) {
@@ -255,14 +315,10 @@ public class CiAnalysisService {
         int llmScore = clamp((int) Math.round(gptScoreRaw * 0.60), 0, 60);
         int totalScore = clamp(ruleScore + llmScore, 0, 100);
 
-        long fakeId = System.currentTimeMillis();
-
         return CiAnalysisResponse.builder()
-
-                .analysisId(fakeId)
+                .analysisId(realAnalysisId)
                 .jobRole(req.getJobRole())
                 .jobDetail(req.getJobDetail())
-
                 .title(req.getTitle())
                 .content(req.getContent())
                 .ruleScore(ruleScore)
@@ -440,5 +496,62 @@ public class CiAnalysisService {
 
     private int clamp(int v, int min, int max) {
         return Math.max(min, Math.min(max, v));
+    }
+
+    // 마이페이지 상세 조회를 위한 메서드 추가
+    @Transactional(readOnly = true)
+    public CiAnalysisResponse getAnalysisResult(Long analysisId) {
+
+        AnalysisEntity entity = analysisRepository.findById(analysisId)
+                .orElseThrow(() -> new RuntimeException("해당 분석 결과가 없습니다. ID: " + analysisId));
+
+        // 1. JSON에서 점수/피드백 꺼내기
+        String strengths = "-";
+        String weaknesses = "-";
+        String feedback = "-";
+        int ruleScore = 0;
+        int llmScore = 0;
+
+        try {
+            if (entity.getScoreJson() != null && !entity.getScoreJson().isBlank()) {
+                JsonNode scoreNode = objectMapper.readTree(entity.getScoreJson());
+                strengths = scoreNode.path("strengths").asText("-");
+                weaknesses = scoreNode.path("weaknesses").asText("-");
+                feedback = scoreNode.path("feedback").asText("-");
+                ruleScore = scoreNode.path("ruleScore").asInt(0);
+                llmScore = scoreNode.path("llmScore").asInt(0);
+            }
+        } catch (Exception e) {
+            System.err.println("JSON 파싱 에러 발생: " + e.getMessage());
+        }
+
+        // 2. 파일 이름(제목) 꺼내기
+        String displayTitle = "자기소개서 분석 결과";
+        if ("FILE".equalsIgnoreCase(entity.getTargetType()) && entity.getTargetId() != null) {
+            displayTitle = ciFileDocumentRepository.findById(entity.getTargetId())
+                    .map(CiFileDocument::getOriginalName)
+                    .orElse("첨부파일 분석 리포트");
+        }
+
+        // 🌟 3. 핵심: 원본 텍스트는 공용 테이블의 summaryDetail 칸에서 꺼내옵니다! (파일 생성 X)
+        String contentText = (entity.getSummaryDetail() != null && !entity.getSummaryDetail().isBlank())
+                ? entity.getSummaryDetail()
+                : "DB에 원본 텍스트가 저장되어 있지 않습니다. (저장할 때 summaryDetail에 내용을 넣어주세요!)";
+
+        // 4. 프론트로 보낼 데이터 조립
+        return CiAnalysisResponse.builder()
+                .analysisId(entity.getAnalysisId())
+                .jobRole(entity.getTargetJob())
+                .title(displayTitle)
+                .totalScore(entity.getOverallScore() != null ? entity.getOverallScore() : 0)
+                .ruleScore(ruleScore)
+                .llmScore(llmScore)
+                .strengths(strengths)
+                .weaknesses(weaknesses)
+                .feedback(feedback)
+                .content(contentText) // 🌟 재사용한 칸에서 꺼낸 텍스트를 쏙!
+                .updatedAt(entity.getAnalyzedAt() != null ?
+                        entity.getAnalyzedAt().toString() : entity.getCreatedAt().toString())
+                .build();
     }
 }

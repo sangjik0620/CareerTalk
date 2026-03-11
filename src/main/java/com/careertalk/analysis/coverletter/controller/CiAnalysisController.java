@@ -6,6 +6,7 @@ import com.careertalk.analysis.coverletter.dto.CiRewriteRequest;
 import com.careertalk.analysis.coverletter.dto.CiRewriteResponse;
 import com.careertalk.analysis.coverletter.service.CiAnalysisService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -34,5 +35,11 @@ public class CiAnalysisController {
     @PostMapping("/rewrite")
     public CiRewriteResponse rewrite(@RequestBody CiRewriteRequest req) {
         return ciAnalysisService.rewriteFromText(req);
+    }
+
+    // 마이페이지에서 상세 결과를 보기 위한 GET API
+    @GetMapping("/result/{analysisId}")
+    public CiAnalysisResponse getAnalysisResult(@PathVariable Long analysisId) {
+        return ciAnalysisService.getAnalysisResult(analysisId);
     }
 }

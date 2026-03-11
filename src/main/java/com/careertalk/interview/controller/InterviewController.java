@@ -1,10 +1,15 @@
 package com.careertalk.interview.controller;
 
+import com.careertalk.auth.entity.Member;
+import com.careertalk.auth.jwt.JwtUtil;
+import com.careertalk.auth.service.MemberService;
 import com.careertalk.interview.dto.SessionTargetRequest;
 import com.careertalk.interview.dto.InterviewResultV2Response;
 import com.careertalk.interview.entity.AnalysisStatus;
 import com.careertalk.interview.entity.InterviewEvaluation;
+import com.careertalk.interview.entity.InterviewSession;
 import com.careertalk.interview.repository.InterviewEvaluationRepository;
+import com.careertalk.interview.repository.InterviewSessionRepository;
 import com.careertalk.interview.service.InterviewAnalysisWorker;
 import com.careertalk.interview.service.InterviewEvaluationService;
 import com.careertalk.interview.service.InterviewResultService;
@@ -16,6 +21,8 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -31,6 +38,9 @@ public class InterviewController {
     private final InterviewAnalysisWorker interviewAnalysisWorker;
     private final InterviewEvaluationRepository evaluationRepository;
 
+    private final InterviewSessionRepository sessionRepository;
+    private final JwtUtil jwtUtil;
+    private final MemberService memberService;
 
     @PostMapping("/upload")
     public ResponseEntity<?> uploadInterview(
@@ -123,5 +133,57 @@ public class InterviewController {
                 "sessionId", sessionId,
                 "status", status
         ));
+    }
+
+    // 마이페이지: 내 면접 기록 전체 조회 API
+    @GetMapping("/my")
+    public ResponseEntity<List<Map<String, Object>>> getMyInterviews(
+            @RequestHeader(value = "Authorization", required = false) String token) {
+
+        if (token == null || !token.startsWith("Bearer ")) {
+            return ResponseEntity.status(401).build();
+        }
+
+        try {
+            // 1. 토큰에서 로그인 아이디 추출 및 유저 조회
+            String jwtToken = token.substring(7);
+            String loginId = jwtUtil.getLoginId(jwtToken);
+            Member member = memberService.findByLoginId(loginId);
+
+            if (member == null) {
+                return ResponseEntity.status(404).build();
+            }
+            Long userNum = member.getUserNum();
+
+            // 2. 내 면접 기록 최신순 조회
+            List<InterviewSession> sessions = sessionRepository.findAllByUserNumOrderByCreatedAtDesc(userNum);
+
+            // 3. 프론트엔드 형식으로 변환
+            List<Map<String, Object>> result = new ArrayList<>();
+            for (InterviewSession session : sessions) {
+                Map<String, Object> dto = new HashMap<>();
+
+                dto.put("id", session.getSessionId());
+                // ⚠️ InterviewSession의 생성일 필드명에 맞게 수정 (예: getCreatedAt)
+                dto.put("date", session.getCreatedAt().toString().substring(0, 10));
+
+                // 프론트 화면에 보여줄 면접 타입과 제목 (DB에 값이 없다면 임의의 문자열을 넣어도 좋습니다)
+                dto.put("type", "AI 모의 면접");
+                dto.put("title", "직무 역량 중심 면접");
+
+                // ⚠️ InterviewSession에 소요시간(초)이 저장되어 있다면 분 단위로 변환
+                // int durationSec = session.getDurationSec();
+                // dto.put("duration", (durationSec / 60) + "분 " + (durationSec % 60) + "초");
+                dto.put("duration", "진행 완료"); // 임시 텍스트
+
+                result.add(dto);
+            }
+
+            return ResponseEntity.ok(result);
+
+        } catch (Exception e) {
+            log.error("면접 기록 조회 중 에러 발생", e);
+            return ResponseEntity.status(401).build();
+        }
     }
 }
