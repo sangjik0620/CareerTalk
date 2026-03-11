@@ -16,6 +16,12 @@ import com.careertalk.file.entity.FileEntity;
 import com.careertalk.file.repository.FileRepository;
 import com.careertalk.file.service.S3Service;
 
+// 💡 [추가된 로직] 이용권 관련 임포트
+import com.careertalk.payment.entity.UserUsageQuota;
+import com.careertalk.payment.repository.UserUsageQuotaRepository;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -50,6 +56,9 @@ public class PortfolioAnalysisService {
     private final FileRepository fileRepository;
     private final MemberRepository memberRepository;
 
+    //  이용권 리포지토리 의존성 주입
+    private final UserUsageQuotaRepository userUsageQuotaRepository;
+
     @Value("${aws.s3.bucket}")
     private String s3BucketName;
 
@@ -71,6 +80,16 @@ public class PortfolioAnalysisService {
                 .orElseThrow(() -> new RuntimeException("해당 아이디의 회원을 찾을 수 없습니다: " + loginId));
         Long userNum = member.getUserNum();
         String nickname = member.getNickname();
+
+        //  1. 분석 시작 전 이용권 잔여 횟수 검증
+        UserUsageQuota quota = userUsageQuotaRepository.findByUserNum(userNum)
+                .orElseThrow(() -> new RuntimeException("이용권 정보를 찾을 수 없습니다."));
+
+        int totalAnalysisRemaining = quota.getFreeAnalysisRemaining() + quota.getPaidAnalysisRemaining();
+        if (totalAnalysisRemaining <= 0) {
+            // 프론트엔드로 403 에러를 던져서 결제 모달/페이지로 이동하게 만듭니다.
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "INSUFFICIENT_QUOTA");
+        }
 
         String originalFilename = file.getOriginalFilename();
         if (originalFilename == null || !originalFilename.toLowerCase().endsWith(".pdf")) {
@@ -115,7 +134,6 @@ public class PortfolioAnalysisService {
                 .build();
         portfolioRepository.save(portfolio);
 
-
         List<String> base64Images = fileParserUtil.extractImagesAsBase64(file);
         String systemPrompt = getSystemPrompt();
         String targetJobData = (detailedPosition != null && !detailedPosition.isBlank())
@@ -125,14 +143,22 @@ public class PortfolioAnalysisService {
 
         try {
             String aiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, base64Images);
-            return processAndSaveAiResult(aiResultJson, userNum, nickname, portfolio.getPortfolioId(), jobCategory, "SUCCESS", null);
+            PortfolioAnalysisResponse response = processAndSaveAiResult(aiResultJson, userNum, nickname, portfolio.getPortfolioId(), jobCategory, "SUCCESS", null);
+
+            // 💡 [추가된 로직] 2. 분석 성공 시 이용권 1회 차감
+            if (quota.getFreeAnalysisRemaining() > 0) {
+                quota.setFreeAnalysisRemaining(quota.getFreeAnalysisRemaining() - 1);
+            } else {
+                quota.setPaidAnalysisRemaining(quota.getPaidAnalysisRemaining() - 1);
+            }
+
+            return response;
         } catch (Exception e) {
             log.error("AI 분석 중 에러 발생: {}", e.getMessage());
             processAndSaveAiResult(null, userNum, nickname, portfolio.getPortfolioId(), jobCategory, "FAILED", e.getMessage());
             throw new RuntimeException("AI 분석 서비스 장애가 발생했습니다.");
         }
     }
-
 
     private PortfolioAnalysisResponse processAndSaveAiResult(String aiResultJson, Long userId, String nickname, Long portfolioId, String jobCategory, String status, String errorMessage) {
         if ("FAILED".equals(status)) {
@@ -156,7 +182,7 @@ public class PortfolioAnalysisService {
                     .analyzedAt(java.time.LocalDateTime.now()).build();
 
             AnalysisEntity savedAnalysis = analysisRepository.save(analysis);
-            return convertToResponseDto(savedAnalysis, nickname); // 💡 닉네임 전달
+            return convertToResponseDto(savedAnalysis, nickname);
         } catch (Exception e) {
             throw new RuntimeException("분석 결과 처리 중 오류 발생");
         }
@@ -175,7 +201,7 @@ public class PortfolioAnalysisService {
                 .orElseThrow(() -> new RuntimeException("유저 정보를 찾을 수 없습니다."));
 
         try {
-            return convertToResponseDto(analysis, member.getNickname()); // 💡 닉네임 조회해서 전달
+            return convertToResponseDto(analysis, member.getNickname());
         } catch (JsonProcessingException e) {
             throw new RuntimeException("데이터 변환 오류");
         }
