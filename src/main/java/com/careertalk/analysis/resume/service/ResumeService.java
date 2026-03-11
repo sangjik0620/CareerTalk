@@ -13,6 +13,8 @@ import com.careertalk.analysis.resume.util.DocxParsingUtill;
 import com.careertalk.file.entity.FileEntity;
 import com.careertalk.file.repository.FileRepository;
 import com.careertalk.file.service.S3Service;
+import com.careertalk.payment.dto.PaymentQuotaResponse;
+import com.careertalk.payment.service.QuotaService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -51,6 +53,7 @@ public class ResumeService {
     private final DocxParsingUtill docxParsingUtill;
     private final OpenAiService openAiService;
     private final ObjectMapper objectMapper;
+    private final QuotaService quotaService;
 
     @Value("${aws.s3.bucket}")
     private String s3BucketName;
@@ -74,6 +77,14 @@ public class ResumeService {
     @Transactional
     public ResumeAnalysisResponse analyzeAndSave(
             MultipartFile file, String jobCategory, String detailedPosition, Long currentUserId) {
+        // ① 이용권 확인
+        PaymentQuotaResponse quota = quotaService.getQuota(currentUserId);
+        if (quota.getFreeAnalysisRemaining() <= 0 && quota.getPaidAnalysisRemaining() <= 0) {
+            throw new ResponseStatusException(HttpStatus.PAYMENT_REQUIRED,
+                    "이용권이 없습니다. 이용권을 구매해 주세요.");
+        }
+
+        quotaService.consumeAnalysis(currentUserId, "resumes", null, "이력서 분석 요청");
 
         // 1. 파일 유효성 검사
         validateFile(file);
