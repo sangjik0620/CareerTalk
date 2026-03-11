@@ -16,7 +16,7 @@ public class EmailService {
 
     private final JavaMailSender mailSender; // static 제거, null 대입 제거
 
-    // 6자리 난수 생성 (static 제거)
+    // 6자리 난수 생성 (static 제거) test
     public String createCode() {
         Random random = new Random();
         return String.valueOf(random.nextInt(888888) + 111111);
