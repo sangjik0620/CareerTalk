@@ -173,4 +173,7 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
               AND e.overall_score IS NOT NULL
             """, nativeQuery = true)
     Double findAverageOverallScore();
+
+    @Transactional
+    void deleteBySessionId(Long sessionId);
 }

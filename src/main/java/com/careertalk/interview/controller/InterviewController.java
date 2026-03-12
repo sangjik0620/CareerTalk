@@ -80,7 +80,8 @@ public class InterviewController {
         List<SessionTargetRequest> targets = java.util.Collections.emptyList();
         if (targetsJson != null && !targetsJson.isBlank()) {
             var om = new com.fasterxml.jackson.databind.ObjectMapper();
-            var typeRef = new com.fasterxml.jackson.core.type.TypeReference<List<SessionTargetRequest>>() {};
+            var typeRef = new com.fasterxml.jackson.core.type.TypeReference<List<SessionTargetRequest>>() {
+            };
             targets = om.readValue(targetsJson, typeRef);
         }
 
@@ -224,6 +225,45 @@ public class InterviewController {
         } catch (Exception e) {
             log.error("면접 기록 조회 중 에러 발생", e);
             return ResponseEntity.status(401).build();
+        }
+    }
+
+    @DeleteMapping("/sessions/{sessionId}")
+    public ResponseEntity<?> deleteInterviewSession(
+            @RequestHeader(value = "Authorization", required = false) String token,
+            @PathVariable Long sessionId
+    ) {
+        if (token == null || !token.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "로그인이 필요합니다."));
+        }
+
+        try {
+            String jwtToken = token.substring(7);
+            String loginId = jwtUtil.getLoginId(jwtToken);
+            Member member = memberService.findByLoginId(loginId);
+
+            if (member == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(Map.of("message", "사용자를 찾을 수 없습니다."));
+            }
+
+            interviewService.deleteInterviewSession(sessionId, member.getUserNum());
+
+            return ResponseEntity.ok(Map.of(
+                    "message", "면접 기록이 삭제되었습니다.",
+                    "sessionId", sessionId
+            ));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(Map.of("message", e.getMessage()));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("message", e.getMessage()));
+        } catch (Exception e) {
+            log.error("면접 기록 삭제 실패 sessionId={}", sessionId, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "면접 기록 삭제 중 오류가 발생했습니다."));
         }
     }
 }

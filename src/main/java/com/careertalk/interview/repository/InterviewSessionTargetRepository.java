@@ -2,6 +2,7 @@ package com.careertalk.interview.repository;
 
 import com.careertalk.interview.entity.InterviewSessionTarget;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -11,4 +12,7 @@ public interface InterviewSessionTargetRepository extends JpaRepository<Intervie
     List<InterviewSessionTarget> findBySessionId(Long sessionId);
 
     Optional<InterviewSessionTarget> findBySessionIdAndTargetType(Long sessionId, String targetType);
+
+    @Transactional
+    void deleteBySessionId(Long sessionId);
 }

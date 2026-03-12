@@ -18,11 +18,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 import com.careertalk.interview.dto.SessionTargetRequest;
+import com.careertalk.file.service.S3Service;
+import com.careertalk.file.entity.FileEntity;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
@@ -35,6 +38,7 @@ public class InterviewService {
     private final S3PresignedUrlService presignedUrlService;
     private final InterviewSessionTargetRepository sessionTargetRepository;
     private final InterviewEvaluationRepository evaluationRepository;
+    private final S3Service s3Service;
 
     @Transactional
     public Long saveInterviewVoice(
@@ -202,5 +206,45 @@ public class InterviewService {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @Transactional
+    public void deleteInterviewSession(Long sessionId, Long userNum) {
+        InterviewSession session = sessionRepository.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("면접 기록을 찾을 수 없습니다."));
+
+        if (!Objects.equals(session.getUserNum(), userNum)) {
+            throw new IllegalStateException("해당 면접 기록을 삭제할 권한이 없습니다.");
+        }
+
+        List<Long> audioFileIds = turnRepository.findAudioFileIdsBySessionId(sessionId).stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+
+        List<FileEntity> audioFiles = audioFileIds.isEmpty()
+                ? List.of()
+                : fileRepository.findAllById(audioFileIds);
+
+        // 1. S3 실제 오디오 파일 삭제
+        for (FileEntity file : audioFiles) {
+            if (file == null) continue;
+            if (file.getS3Key() == null || file.getS3Key().isBlank()) continue;
+
+            s3Service.deleteFile(file.getS3Key());
+        }
+
+        // 2. 하위 데이터 삭제
+        evaluationRepository.deleteBySessionId(sessionId);
+        sessionTargetRepository.deleteBySessionId(sessionId);
+        turnRepository.deleteBySessionId(sessionId);
+
+        // 3. files 테이블 삭제
+        if (!audioFileIds.isEmpty()) {
+            fileRepository.deleteAllByIdInBatch(audioFileIds);
+        }
+
+        // 4. 마지막에 세션 삭제
+        sessionRepository.deleteBySessionId(sessionId);
     }
 }
