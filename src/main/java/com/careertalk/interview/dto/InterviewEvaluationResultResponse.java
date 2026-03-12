@@ -29,7 +29,7 @@ public class InterviewEvaluationResultResponse {
     public static class InterviewInfo {
         private String date;
         private String duration;
-        private String position;
+        private String title;
         private String company;
     }
 
