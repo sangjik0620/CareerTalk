@@ -65,8 +65,32 @@ public class InterviewEvaluationService {
         int overall = computeOverallScore(turns, turns.size());
         int percentileRank = calculatePercentile(overall, session.getSessionId());
 
+        Integer previousScore = evaluationRepository.findPreviousOverallScore(
+                session.getUserNum(),
+                session.getCreatedAt()
+        );
+
+        Double averageOverallScore = evaluationRepository.findAverageOverallScore();
+        Integer passedAverage = averageOverallScore == null
+                ? null
+                : clamp0_100((int) Math.round(averageOverallScore));
+
         summary.put("overallScore", overall);
         summary.put("percentileRank", percentileRank);
+        summary.put("verdict", calculateVerdict(overall));
+
+        if (previousScore != null) {
+            summary.put("previousScore", clamp0_100(previousScore));
+        } else {
+            summary.putNull("previousScore");
+        }
+
+        if (passedAverage != null) {
+            summary.put("passedAverage", passedAverage);
+        } else {
+            summary.putNull("passedAverage");
+        }
+
         comparison.put("percentileRank", percentileRank);
 
         // 4) 세션 result_json 저장
@@ -879,7 +903,7 @@ public class InterviewEvaluationService {
                 if (json == null || json.isBlank()) continue;
 
                 JsonNode node = objectMapper.readTree(json);
-                int score = clamp0_100(node.path("score").asInt(0));
+                int score = clamp0_100(node.path("score").path("overall").asInt(0));
 
                 sum += score;
                 count++;
@@ -939,6 +963,19 @@ public class InterviewEvaluationService {
         }
 
         return clamp0_100((int) Math.round(answered * 100.0 / totalQuestions));
+    }
+
+    private String calculateVerdict(int overallScore) {
+
+        if (overallScore > 80) {
+            return "합격권";
+        }
+
+        if (overallScore > 50) {
+            return "개선";
+        }
+
+        return "불합격";
     }
 
     private ObjectNode emptyCompetencyBlock() {

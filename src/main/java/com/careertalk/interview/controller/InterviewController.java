@@ -122,7 +122,7 @@ public class InterviewController {
         Long userNum = member.getUserNum(); // ✨ 여기서 얻은 유저 번호가 핵심!
 
         String status = evaluationService.getAnalysisStatus(sessionId);
-        log.info("sessionId: {}, status : {}", sessionId, status);
+//        log.info("sessionId: {}, status : {}", sessionId, status);
 
         if (!"DONE".equalsIgnoreCase(status)) {
             return ResponseEntity.status(202).body(Map.of(

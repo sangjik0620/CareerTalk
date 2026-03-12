@@ -134,19 +134,43 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
                                  @Param("sessionId") Long sessionId);
 
     @Query(value = """
-        SELECT DATE_FORMAT(s.created_at, '%m-%d') AS label, e.overall_score AS score, s.session_id
-        FROM interview_sessions s
-        JOIN interview_evaluations e ON e.session_id = s.session_id
-        WHERE s.user_num = :userNum
-          AND s.created_at <= :currentCreatedAt
-          AND e.analysis_status = 'DONE'
-          AND e.overall_score IS NOT NULL
-        ORDER BY s.created_at DESC
-        LIMIT :limit
-        """, nativeQuery = true)
+            SELECT DATE_FORMAT(s.created_at, '%m-%d') AS label, e.overall_score AS score, s.session_id
+            FROM interview_sessions s
+            JOIN interview_evaluations e ON e.session_id = s.session_id
+            WHERE s.user_num = :userNum
+              AND s.created_at <= :currentCreatedAt
+              AND e.analysis_status = 'DONE'
+              AND e.overall_score IS NOT NULL
+            ORDER BY s.created_at DESC
+            LIMIT :limit
+            """, nativeQuery = true)
     List<Object[]> findScoreHistoryUntilCurrent(
             @Param("userNum") Long userNum,
             @Param("currentCreatedAt") LocalDateTime currentCreatedAt,
             @Param("limit") int limit
     );
+
+    @Query(value = """
+            SELECT e.overall_score
+            FROM interview_sessions s
+            JOIN interview_evaluations e ON e.session_id = s.session_id
+            WHERE s.user_num = :userNum
+              AND s.created_at < :currentCreatedAt
+              AND e.analysis_status = 'DONE'
+              AND e.overall_score IS NOT NULL
+            ORDER BY s.created_at DESC
+            LIMIT 1
+            """, nativeQuery = true)
+    Integer findPreviousOverallScore(
+            @Param("userNum") Long userNum,
+            @Param("currentCreatedAt") LocalDateTime currentCreatedAt
+    );
+
+    @Query(value = """
+            SELECT AVG(e.overall_score)
+            FROM interview_evaluations e
+            WHERE e.analysis_status = 'DONE'
+              AND e.overall_score IS NOT NULL
+            """, nativeQuery = true)
+    Double findAverageOverallScore();
 }

@@ -57,7 +57,7 @@ public class InterviewService {
         session.setUserNum(userId);
 
         // ✅ 추가: title 기본값
-        session.setTitle(" AI 모의면접");
+        session.setTitle("AI 모의면접");
 
         session.setMode("VOICE");
         session.setStatus("ENDED");
