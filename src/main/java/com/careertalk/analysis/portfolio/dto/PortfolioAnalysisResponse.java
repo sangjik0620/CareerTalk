@@ -29,9 +29,9 @@ public class PortfolioAnalysisResponse {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class ChartDataDto {
-        private String subject;  // 항목명 (예: 문제 해결력)
-        private int score;       // 점수
-        private int fullMark;    // 만점 기준 (보통 100)
+        private String subject;  // 항목명
+        private int score;
+        private int fullMark;
     }
 
     /* 예상 면접 질문 및 질문 의도 */

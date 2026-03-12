@@ -55,8 +55,6 @@ public class PortfolioAnalysisService {
     private final S3Service s3Service;
     private final FileRepository fileRepository;
     private final MemberRepository memberRepository;
-
-    //  이용권 리포지토리 의존성 주입
     private final UserUsageQuotaRepository userUsageQuotaRepository;
 
     @Value("${aws.s3.bucket}")
@@ -81,13 +79,12 @@ public class PortfolioAnalysisService {
         Long userNum = member.getUserNum();
         String nickname = member.getNickname();
 
-        //  1. 분석 시작 전 이용권 잔여 횟수 검증
+        //  분석 시작 전 이용권 잔여 횟수 검증
         UserUsageQuota quota = userUsageQuotaRepository.findByUserNum(userNum)
                 .orElseThrow(() -> new RuntimeException("이용권 정보를 찾을 수 없습니다."));
 
         int totalAnalysisRemaining = quota.getFreeAnalysisRemaining() + quota.getPaidAnalysisRemaining();
         if (totalAnalysisRemaining <= 0) {
-            // 프론트엔드로 403 에러를 던져서 결제 모달/페이지로 이동하게 만듭니다.
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "INSUFFICIENT_QUOTA");
         }
 
@@ -145,7 +142,7 @@ public class PortfolioAnalysisService {
             String aiResultJson = openAiService.getAiResponse(systemPrompt, userPrompt, base64Images);
             PortfolioAnalysisResponse response = processAndSaveAiResult(aiResultJson, userNum, nickname, portfolio.getPortfolioId(), jobCategory, "SUCCESS", null);
 
-            // 💡 [추가된 로직] 2. 분석 성공 시 이용권 1회 차감
+            // 분석 성공 시 이용권 1회 차감
             if (quota.getFreeAnalysisRemaining() > 0) {
                 quota.setFreeAnalysisRemaining(quota.getFreeAnalysisRemaining() - 1);
             } else {
@@ -217,25 +214,25 @@ public class PortfolioAnalysisService {
 
     private PortfolioAnalysisResponse convertToResponseDto(AnalysisEntity analysis, String nickname) throws JsonProcessingException {
 
-        // 1. 예상 질문 리스트 처리 (Null 방어)
+        // 예상 질문 리스트 처리
         List<QuestionDto> questionList;
         String questionsJson = analysis.getExpectedQuestionsJson();
         if (questionsJson != null && !questionsJson.isBlank() && !questionsJson.equals("null")) {
             questionList = objectMapper.readValue(questionsJson, new TypeReference<>() {});
         } else {
-            questionList = List.of(); // null이면 빈 리스트로 초기화
+            questionList = List.of();
         }
 
-        // 2. 점수 데이터 처리 (Null 방어)
+        // 점수 데이터 처리
         Map<String, Integer> scoreMap;
         String scoreJson = analysis.getScoreJson();
         if (scoreJson != null && !scoreJson.isBlank() && !scoreJson.equals("null")) {
             scoreMap = objectMapper.readValue(scoreJson, new TypeReference<>() {});
         } else {
-            scoreMap = Map.of(); // null이면 빈 맵으로 초기화
+            scoreMap = Map.of();
         }
 
-        // 3. 차트 데이터 변환 (scoreMap이 비어있어도 에러 없이 빈 리스트가 생성됨)
+        // 차트 데이터 변환
         List<ChartDataDto> chartDataList = scoreMap.entrySet().stream()
                 .map(entry -> ChartDataDto.builder()
                         .subject(entry.getKey())
@@ -244,7 +241,7 @@ public class PortfolioAnalysisService {
                         .build())
                 .collect(Collectors.toList());
 
-        // 4. 최종 객체 생성 (모든 필드에 대해 null 체크 적용)
+        // 최종 객체 생성
         return PortfolioAnalysisResponse.builder()
                 .analysisId(analysis.getAnalysisId())
                 .portfolioId(analysis.getTargetId())
