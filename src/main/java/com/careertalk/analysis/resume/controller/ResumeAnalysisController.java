@@ -75,7 +75,7 @@ public class ResumeAnalysisController {
     }
 
     /**
-     * ⭐ 추가: 분석 결과 조회
+     * 분석 결과 조회
      * GET /api/resumes/{analysisId}/result
      */
     @GetMapping("/{analysisId}/result")
@@ -87,4 +87,16 @@ public class ResumeAnalysisController {
         return ResponseEntity.ok(response);
     }
 
+    @DeleteMapping("/{analysisId}")
+    public ResponseEntity<String> deleteResumeAnalysis(
+            @PathVariable("analysisId") Long analysisId
+    ){
+        Long currentUserId = getCurrentUserId();
+        log.info("\"이력서 분석 삭제 요청 - AnalysisId: {}, User: {}\", analysisId, loginId");
+
+        // analysis, files, resumes db 내용 삭제
+        resumeService.deleteResumeAnalysis(analysisId, currentUserId);
+
+        return ResponseEntity.ok("포트폴리오 분석 기록과 파일이 성공적으로 삭제되었습니다.");
+    }
 }
