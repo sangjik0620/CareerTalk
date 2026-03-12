@@ -47,4 +47,7 @@ public class CIEssay {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    @Column(name = "rewritten_content", columnDefinition = "LONGTEXT")
+    private String rewrittenContent;
 }

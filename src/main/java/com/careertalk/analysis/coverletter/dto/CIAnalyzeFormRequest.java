@@ -9,4 +9,5 @@ public class CIAnalyzeFormRequest {
     private String title;
     private String content;
     private String targetJob;
+    private String jobDetail;
 }
