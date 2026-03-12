@@ -164,9 +164,9 @@ public class InterviewEvaluationService {
         }
         info.put("duration", formatDuration(session.getStartedAt(), session.getEndedAt()));
 
-        String position = safe(session.getTitle()).trim();
-        if (!position.isBlank()) {
-            info.put("position", position);
+        String title = safe(session.getTitle()).trim();
+        if (!title.isBlank()) {
+            info.put("title", title);
         }
 
         String jobCategory = resolveJobCategory(session);
