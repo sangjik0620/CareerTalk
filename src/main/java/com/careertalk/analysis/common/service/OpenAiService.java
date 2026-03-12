@@ -54,7 +54,7 @@ public class OpenAiService {
 
         requestBody.put("messages", List.of(
                 Map.of("role", "system", "content", systemPrompt),
-                Map.of("role", "user", "content", contentList) // 변경됨
+                Map.of("role", "user", "content", contentList)
         ));
 
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);

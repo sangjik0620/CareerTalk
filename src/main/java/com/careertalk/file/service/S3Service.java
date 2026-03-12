@@ -67,7 +67,7 @@ public class S3Service {
                 .bucket(bucket)
                 .key(key)
                 .build();
-        return s3Client.getObject(getObjectRequest); // ResponseInputStream 반환
+        return s3Client.getObject(getObjectRequest);
     }
 
 }
