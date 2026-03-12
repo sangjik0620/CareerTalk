@@ -20,6 +20,9 @@ public class CiAnalysisResponse {
     private int llmScore;
     private int totalScore;
 
+    private String rewrittenEssay;
+    private boolean rewriteGenerated;
+
     private String strengths;
     private String weaknesses;
     private String feedback;

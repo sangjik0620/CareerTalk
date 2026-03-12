@@ -1,6 +1,10 @@
 package com.careertalk.analysis.coverletter.controller;
 
-import com.careertalk.analysis.coverletter.dto.*;
+import com.careertalk.analysis.coverletter.dto.CIAnalyzeFormRequest;
+import com.careertalk.analysis.coverletter.dto.CIAnalyzeResponse;
+import com.careertalk.analysis.coverletter.dto.CiAnalysisResponse;
+import com.careertalk.analysis.coverletter.dto.CiRewriteRequest;
+import com.careertalk.analysis.coverletter.dto.CiRewriteResponse;
 import com.careertalk.analysis.coverletter.service.CiAnalysisService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -11,43 +15,35 @@ import org.springframework.web.multipart.MultipartFile;
 @RestController
 @RequestMapping("/api/ci")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "http://localhost:5173")
 public class CiAnalysisController {
 
     private final CiAnalysisService ciAnalysisService;
 
     @PostMapping(value = "/analyze", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<?> analyze(
+    public ResponseEntity<CIAnalyzeResponse> analyze(
             @RequestHeader("Authorization") String authorization,
             @RequestPart("request") CIAnalyzeFormRequest request,
             @RequestPart(value = "file", required = false) MultipartFile file
     ) {
-        try {
-            CIAnalyzeResponse response = ciAnalysisService.analyzeAndSave(authorization, request, file);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.badRequest().body("분석 실패: " + e.getMessage());
-        }
+        CIAnalyzeResponse response = ciAnalysisService.analyzeAndSave(authorization, request, file);
+        return ResponseEntity.ok(response);
     }
 
     @PostMapping("/rewrite")
-    public ResponseEntity<?> rewrite(
+    public ResponseEntity<CiRewriteResponse> rewrite(
             @RequestHeader("Authorization") String authorization,
             @RequestBody CiRewriteRequest request
     ) {
-        try {
-            CiRewriteResponse response = ciAnalysisService.rewriteFromText(request);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            e.printStackTrace();
-            return ResponseEntity.badRequest().body("개선본 생성 실패: " + e.getMessage());
-        }
+        CiRewriteResponse response = ciAnalysisService.rewriteFromText(authorization, request);
+        return ResponseEntity.ok(response);
     }
 
-    // 마이페이지에서 상세 결과를 보기 위한 GET API
     @GetMapping("/result/{analysisId}")
-    public CiAnalysisResponse getAnalysisResult(@PathVariable Long analysisId) {
-        return ciAnalysisService.getAnalysisResult(analysisId);
+    public ResponseEntity<CiAnalysisResponse> getAnalysisResult(
+            @RequestHeader("Authorization") String authorization,
+            @PathVariable Long analysisId
+    ) {
+        CiAnalysisResponse response = ciAnalysisService.getAnalysisResult(authorization, analysisId);
+        return ResponseEntity.ok(response);
     }
 }

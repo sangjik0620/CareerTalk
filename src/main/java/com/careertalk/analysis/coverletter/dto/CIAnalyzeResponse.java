@@ -29,4 +29,6 @@ public class CIAnalyzeResponse {
 
     private String jobRole;
     private String jobDetail;
+
+
 }
