@@ -259,24 +259,10 @@ public class ResumeService {
         try {
             JsonNode root = objectMapper.readTree(aiResultJson);
 
-            // ✅ 정합성 검증 실패 처리
+            // 정합성 검증 실패 / 텍스트 품질 불량 처리
             if (root.path("validationError").asBoolean(false)) {
-                String errorDetail = root.path("errorDetail").asText("직군 정합성 오류");
-
-                AnalysisEntity failed = AnalysisEntity.builder()
-                        .userNum(userId)
-                        .targetType("RESUME")
-                        .targetId(resumeId)
-                        .targetJob(jobCategory)
-                        .status("FAILED")
-                        .errorMessage(errorDetail)
-                        .analyzedAt(LocalDateTime.now())
-                        .build();
-
-                analysisRepository.save(failed);
-
-                throw new ResponseStatusException(
-                        HttpStatus.UNPROCESSABLE_ENTITY, errorDetail);
+                String errorDetail = root.path("errorDetail").asText("분석을 진행할 수 없습니다.");
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, errorDetail);
             }
 
             int overallScore             = root.get("overallScore").asInt();
