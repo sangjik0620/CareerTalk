@@ -254,4 +254,61 @@ public class PortfolioAnalysisService {
                 .nickname(nickname)
                 .build();
     }
+
+    /**
+     * 포트폴리오 분석 기록을 완전 삭제 (S3 파일 + DB 레코드 3종)
+     * @param analysisId 삭제할 분석 결과 ID
+     * @param loginId 요청한 유저의 로그인 ID (권한 확인용)
+     */
+    @Transactional
+    public void deletePortfolioAnalysis(Long analysisId, String loginId) {
+
+        // 1. 요청한 유저 확인
+        Member member = memberRepository.findByLoginId(loginId)
+                .orElseThrow(() -> new RuntimeException("해당 아이디의 회원을 찾을 수 없습니다: " + loginId));
+        Long userNum = member.getUserNum();
+
+        // 2. 삭제할 분석 기록(AnalysisEntity) 찾기 및 권한 검증
+        AnalysisEntity analysis = analysisRepository.findById(analysisId)
+                .orElseThrow(() -> new RuntimeException("삭제할 분석 결과를 찾을 수 없습니다."));
+
+        if (!analysis.getUserNum().equals(userNum)) {
+            throw new RuntimeException("해당 결과에 대한 삭제 권한이 없습니다.");
+        }
+
+        if (!"PORTFOLIO".equals(analysis.getTargetType())) {
+            throw new RuntimeException("포트폴리오 분석 결과가 아닙니다.");
+        }
+
+        Long portfolioId = analysis.getTargetId();
+
+        // 3. 연결된 포트폴리오(PortfolioEntity) 찾기
+        PortfolioEntity portfolio = portfolioRepository.findById(portfolioId).orElse(null);
+
+        if (portfolio != null) {
+            Long fileId = portfolio.getFileId();
+            FileEntity fileEntity = fileRepository.findById(fileId).orElse(null);
+
+            if (fileEntity != null) {
+                // 5. AWS S3 저장소에서 진짜 파일(PDF) 삭제
+                String s3Key = fileEntity.getS3Key();
+                try {
+                    s3Service.deleteFile(s3Key);
+                } catch (Exception e) {
+                    log.error("S3 파일 삭제 실패... (계속 진행)", e);
+                }
+            }
+
+            // 🔥 [수정됨] 6. 자식인 PortfolioEntity를 "먼저" 삭제합니다!
+            portfolioRepository.delete(portfolio);
+
+            // 🔥 [수정됨] 7. 부모인 FileEntity를 "나중에" 삭제합니다!
+            if (fileEntity != null) {
+                fileRepository.delete(fileEntity);
+            }
+        }
+
+        // 8. 마지막으로 AnalysisEntity 삭제
+        analysisRepository.delete(analysis);
+    }
 }
