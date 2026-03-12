@@ -27,6 +27,9 @@ public class InterviewSession {
     @Column(name = "title", nullable = false)
     private String title = "AI 모의면접";
 
+    @Column(name = "job_category")
+    private String jobCategory;
+
     // "TEXT" or "VOICE"
     @Column(name = "mode", nullable = false)
     private String mode = "VOICE";
