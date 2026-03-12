@@ -16,6 +16,11 @@ import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import com.careertalk.analysis.common.entity.AnalysisEntity;
+import com.careertalk.analysis.common.repository.AnalysisRepository;
+import com.careertalk.interview.entity.InterviewSessionTarget;
+import com.careertalk.interview.repository.InterviewSessionTargetRepository;
+import com.careertalk.interview.util.InterviewJobCompetencyTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -24,7 +29,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -36,6 +40,8 @@ public class InterviewEvaluationService {
     private final InterviewEvaluationRepository evaluationRepository;
     private final InterviewOpenAiService interviewOpenAiService;
     private final ObjectMapper objectMapper;
+    private final InterviewSessionTargetRepository sessionTargetRepository;
+    private final AnalysisRepository analysisRepository;
 
     @Value("classpath:prompts/interview_evaluation.txt")
     private Resource interviewEvalSystemPrompt;
@@ -61,8 +67,9 @@ public class InterviewEvaluationService {
         // 3) 총점 계산: 이제 turn.feedback_json 의 score 평균으로 계산
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
         ObjectNode comparison = (ObjectNode) evaluation.with("comparison");
+        JsonNode competency = evaluation.path("competency");
 
-        int overall = computeOverallScore(turns, turns.size());
+        int overall = computeOverallScore(turns, turns.size(), competency);
         int percentileRank = calculatePercentile(overall, session.getSessionId());
 
         Integer previousScore = evaluationRepository.findPreviousOverallScore(
@@ -162,6 +169,11 @@ public class InterviewEvaluationService {
             info.put("position", position);
         }
 
+        String jobCategory = resolveJobCategory(session);
+        if (!jobCategory.isBlank()) {
+            info.put("jobCategory", jobCategory);
+        }
+
         int answered = 0;
         int total = turns.size();
         int totalWords = 0;
@@ -227,8 +239,14 @@ public class InterviewEvaluationService {
 
         // competency
         ObjectNode competency = root.putObject("competency");
-        competency.set("technical", emptyCompetencyBlock());
-        competency.set("soft", emptyCompetencyBlock());
+        competency.set(
+                "technical",
+                emptyCompetencyBlock(InterviewJobCompetencyTemplate.technicalLabels(jobCategory))
+        );
+        competency.set(
+                "soft",
+                emptyCompetencyBlock(InterviewJobCompetencyTemplate.softLabels())
+        );
         competency.set("improvements", objectMapper.createArrayNode());
 
         // comparison
@@ -253,8 +271,21 @@ public class InterviewEvaluationService {
         meta.put("llmStatus", "PENDING");
 
         ObjectNode payload = objectMapper.createObjectNode();
+
+        String jobCategory = resolveJobCategory(session);
+        ArrayNode technicalLabels = payload.putArray("technicalLabels");
+        for (String label : InterviewJobCompetencyTemplate.technicalLabels(jobCategory)) {
+            technicalLabels.add(label);
+        }
+
+        ArrayNode softLabels = payload.putArray("softLabels");
+        for (String label : InterviewJobCompetencyTemplate.softLabels()) {
+            softLabels.add(label);
+        }
+
         payload.put("sessionId", session.getSessionId());
         payload.put("position", safe(session.getTitle()));
+        payload.put("jobCategory", jobCategory);
         payload.put("createdAt", session.getCreatedAt() == null ? "" : session.getCreatedAt().toString());
 
         ArrayNode tArr = payload.putArray("turns");
@@ -350,15 +381,47 @@ public class InterviewEvaluationService {
         JsonNode outComp = out.path("competency");
 
         JsonNode technical = outComp.path("technical");
-        if (technical.isObject()) {
+        if (isValidCompetencyBlock(
+                technical,
+                InterviewJobCompetencyTemplate.technicalLabels(jobCategory)
+        )) {
             competency.set("technical", technical.deepCopy());
+        } else {
+            log.warn("[LLM COMPETENCY] invalid technical block. use fallback. raw={}", safeWrite(technical));
+            competency.set(
+                    "technical",
+                    buildFallbackCompetencyBlock(
+                            InterviewJobCompetencyTemplate.technicalLabels(jobCategory),
+                            clamp0_100(outSummary.path("technicalIndex").asInt(0)),
+                            10
+                    )
+            );
         }
 
         JsonNode soft = outComp.path("soft");
-        if (soft.isObject()) {
+        if (isValidCompetencyBlock(
+                soft,
+                InterviewJobCompetencyTemplate.softLabels()
+        )) {
             competency.set("soft", soft.deepCopy());
-        }
+        } else {
+            log.warn("[LLM COMPETENCY] invalid soft block. use fallback. raw={}", safeWrite(soft));
+            int baseSoftScore = clamp0_100(outSummary.path("communicationIndex").asInt(0));
+            if (baseSoftScore == 0) {
+                baseSoftScore = clamp0_100(outSummary.path("confidenceIndex").asInt(0));
+            }
 
+            competency.set(
+                    "soft",
+                    buildFallbackCompetencyBlock(
+                            InterviewJobCompetencyTemplate.softLabels(),
+                            baseSoftScore,
+                            10
+                    )
+            );
+        }
+        log.info("[LLM COMP RAW] technical={}", safeWrite(outComp.path("technical")));
+        log.info("[LLM COMP RAW] soft={}", safeWrite(outComp.path("soft")));
         competency.set("improvements", normalizeImprovements(outComp.path("improvements")));
 
         // summary fallback
@@ -369,8 +432,8 @@ public class InterviewEvaluationService {
         summary.put("technicalIndex", technicalIndex);
 
         int communicationIndex = clamp0_100(summary.path("communicationIndex").asInt(0));
-        if (communicationIndex == 0 && competency.path("soft").path("details").path("communication").isNumber()) {
-            communicationIndex = clamp0_100(competency.path("soft").path("details").path("communication").asInt());
+        if (communicationIndex == 0) {
+            communicationIndex = fallbackCommunicationIndex(competency.path("soft").path("details"));
         }
         summary.put("communicationIndex", communicationIndex);
 
@@ -713,7 +776,8 @@ public class InterviewEvaluationService {
             Integer speakingRate,
             Double pauseRatio,
             Integer pitchStability
-    ) {}
+    ) {
+    }
 
     private ArrayNode normalizeTopKeywords(JsonNode node) {
         ArrayNode out = objectMapper.createArrayNode();
@@ -879,15 +943,29 @@ public class InterviewEvaluationService {
      * 총점은 세션 result_json.questionResponses 가 아니라
      * interview_turn.feedback_json.score 평균으로 계산
      */
-    private int computeOverallScore(List<InterviewTurn> turns, int totalQuestions) {
+    private int computeOverallScore(List<InterviewTurn> turns, int totalQuestions, JsonNode competency) {
         double contentScore = computeContentScore(turns);
         double voiceScore = computeVoiceScore(turns);
         double completionScore = computeCompletionScore(turns, totalQuestions);
 
+        int technicalCurrent = clamp0_100(
+                competency.path("technical").path("current").asInt(0)
+        );
+        int softCurrent = clamp0_100(
+                competency.path("soft").path("current").asInt(0)
+        );
+        double competencyScore = (technicalCurrent + softCurrent) / 2.0;
+
         int overall = (int) Math.round(
-                contentScore * 0.60 +
-                        voiceScore * 0.25 +
-                        completionScore * 0.15
+                contentScore * 0.45 +
+                        voiceScore * 0.20 +
+                        completionScore * 0.15 +
+                        competencyScore * 0.20
+        );
+
+        log.info(
+                "[OVERALL] contentScore={} voiceScore={} completionScore={} competencyScore={} overall={}",
+                contentScore, voiceScore, completionScore, competencyScore, overall
         );
 
         return clamp0_100(overall);
@@ -903,7 +981,7 @@ public class InterviewEvaluationService {
                 if (json == null || json.isBlank()) continue;
 
                 JsonNode node = objectMapper.readTree(json);
-                int score = clamp0_100(node.path("score").path("overall").asInt(0));
+                int score = clamp0_100(node.path("score").asInt(0));
 
                 sum += score;
                 count++;
@@ -978,11 +1056,19 @@ public class InterviewEvaluationService {
         return "불합격";
     }
 
-    private ObjectNode emptyCompetencyBlock() {
+    private ObjectNode emptyCompetencyBlock(List<String> labels) {
         ObjectNode block = objectMapper.createObjectNode();
         block.put("current", 0);
         block.put("target", 0);
-        block.set("details", objectMapper.createObjectNode());
+
+        ObjectNode details = objectMapper.createObjectNode();
+        for (String label : labels) {
+            if (label != null && !label.isBlank()) {
+                details.put(label, 0);
+            }
+        }
+
+        block.set("details", details);
         return block;
     }
 
@@ -1038,4 +1124,162 @@ public class InterviewEvaluationService {
     private int nvl(Integer v) {
         return v == null ? 0 : v;
     }
+
+    private String resolveJobCategory(InterviewSession session) {
+        String sessionJobCategory = normalizeJobCategory(session.getJobCategory());
+        if (!sessionJobCategory.isBlank()) {
+            return sessionJobCategory;
+        }
+
+        List<InterviewSessionTarget> targets = sessionTargetRepository.findBySessionId(session.getSessionId());
+
+        for (InterviewSessionTarget target : targets) {
+            if (target.getAnalysisId() == null) {
+                continue;
+            }
+
+            AnalysisEntity analysis = analysisRepository.findById(target.getAnalysisId()).orElse(null);
+            if (analysis == null) {
+                continue;
+            }
+
+            String targetJob = safe(analysis.getTargetJob()).trim();
+            if (!targetJob.isBlank()) {
+                return normalizeJobCategory(targetJob);
+            }
+        }
+
+        return normalizeJobCategory(session.getTitle());
+    }
+
+    private String normalizeJobCategory(String raw) {
+        String value = safe(raw).trim();
+        if (value.isBlank()) {
+            return "";
+        }
+
+        String[] categories = {
+                "기획∙전략",
+                "마케팅∙홍보∙조사",
+                "회계∙세무∙재무",
+                "인사∙노무∙HRD",
+                "총무∙법무∙사무",
+                "IT개발∙데이터",
+                "디자인",
+                "영업∙판매∙무역",
+                "고객상담∙TM",
+                "구매∙자재∙물류",
+                "상품기획∙MD",
+                "운전∙운송∙배송",
+                "서비스",
+                "생산",
+                "건설∙건축",
+                "의료",
+                "연구∙R&D",
+                "교육",
+                "미디어∙문화∙스포츠",
+                "금융∙보험",
+                "공공∙복지"
+        };
+
+        for (String category : categories) {
+            if (value.contains(category)) {
+                return category;
+            }
+        }
+
+        return value;
+    }
+
+    private int fallbackCommunicationIndex(JsonNode softDetails) {
+        if (softDetails == null || !softDetails.isObject()) {
+            return 0;
+        }
+
+        String[] preferredKeys = {"커뮤니케이션", "의사소통", "communication"};
+        for (String key : preferredKeys) {
+            JsonNode node = softDetails.path(key);
+            if (node.isNumber()) {
+                return clamp0_100(node.asInt(0));
+            }
+        }
+
+        int sum = 0;
+        int count = 0;
+        var fields = softDetails.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> entry = fields.next();
+            if (entry.getValue() != null && entry.getValue().isNumber()) {
+                sum += clamp0_100(entry.getValue().asInt(0));
+                count++;
+            }
+        }
+
+        if (count == 0) {
+            return 0;
+        }
+
+        return clamp0_100((int) Math.round(sum * 1.0 / count));
+    }
+
+    private boolean isValidCompetencyBlock(JsonNode block, List<String> expectedLabels) {
+        if (block == null || !block.isObject()) {
+            return false;
+        }
+
+        JsonNode current = block.path("current");
+        JsonNode target = block.path("target");
+        JsonNode details = block.path("details");
+
+        if (!current.isNumber() || !target.isNumber() || !details.isObject()) {
+            return false;
+        }
+
+        int currentValue = clamp0_100(current.asInt(0));
+        int targetValue = clamp0_100(target.asInt(0));
+
+        if (currentValue == 0 && targetValue == 0) {
+            return false;
+        }
+
+        for (String label : expectedLabels) {
+            JsonNode value = details.path(label);
+            if (!value.isNumber()) {
+                return false;
+            }
+        }
+
+        var fields = details.fieldNames();
+        while (fields.hasNext()) {
+            String key = fields.next();
+            if (!expectedLabels.contains(key)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private ObjectNode buildFallbackCompetencyBlock(List<String> labels, int baseScore, int targetGap) {
+        ObjectNode block = objectMapper.createObjectNode();
+
+        int current = clamp0_100(baseScore);
+        int target = clamp0_100(current + Math.max(5, targetGap));
+
+        block.put("current", current);
+        block.put("target", target);
+
+        ObjectNode details = objectMapper.createObjectNode();
+
+        int[] offsets = {5, -5, 0, 3, -3, 2};
+        for (int i = 0; i < labels.size(); i++) {
+            String label = labels.get(i);
+            int offset = offsets[i % offsets.length];
+            details.put(label, clamp0_100(current + offset));
+        }
+
+        block.set("details", details);
+        return block;
+    }
+
 }

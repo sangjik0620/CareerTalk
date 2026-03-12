@@ -193,29 +193,39 @@ sentimentScore
 
 ──────────────── competency 생성 규칙 ────────────────
 
+입력 데이터에 다음 필드가 제공된다.
+
+- jobCategory
+- technicalLabels
+- softLabels
+
+반드시 아래 규칙을 따른다.
+
 technical
 - current
 - target
-
-details
-- frontEnd
-- backEnd
-- database
-- deployment
+- details 는 technicalLabels 배열의 라벨을 "그대로 key 로 사용"한다.
+- key 이름을 임의로 영문 변환하거나 축약하지 마라.
+- technicalLabels 에 없는 key 를 추가하지 마라.
 
 soft
 - current
 - target
+- details 는 softLabels 배열의 라벨을 "그대로 key 로 사용"한다.
+- key 이름을 임의로 변경하지 마라.
+- softLabels 에 없는 key 를 추가하지 마라.
 
-details
-- communication
-- teamwork
-- leadership
-- presentation
+점수 규칙
+- 모든 점수는 1~100 정수
+- current 는 현재 면접 답변 수준
+- target 은 현실적인 목표치이며 current 보다 같거나 높게 설정
+- details 의 평균 흐름이 current 와 크게 어긋나지 않게 맞춘다.
 
 improvements
 - 부족한 역량 중심
 - 최대 3개
+- area 는 가능하면 technicalLabels 또는 softLabels 중 하나를 사용
+- priority 는 high / medium / low 중 하나
 
 필드
 - area
@@ -272,26 +282,26 @@ turn 피드백보다 더 종합적이고 상세해야 함
     "topKeywords": []
   },
   "competency": {
-    "technical": {
-      "target": 0,
-      "current": 0,
-      "details": {
-        "frontEnd": 0,
-        "backEnd": 0,
-        "database": 0,
-        "deployment": 0
-      }
-    },
-    "soft": {
-      "target": 0,
-      "current": 0,
-      "details": {
-        "communication": 0,
-        "teamwork": 0,
-        "leadership": 0,
-        "presentation": 0
-      }
-    },
+      "technical": {
+        "target": 0,
+        "current": 0,
+        "details": {
+          "직무역량1": 0,
+          "직무역량2": 0,
+          "직무역량3": 0,
+          "직무역량4": 0
+        }
+      },
+      "soft": {
+        "target": 0,
+        "current": 0,
+        "details": {
+          "공통역량1": 0,
+          "공통역량2": 0,
+          "공통역량3": 0,
+          "공통역량4": 0
+        }
+      },
     "improvements": [
       {
         "area": "",

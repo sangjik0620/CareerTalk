@@ -50,7 +50,8 @@ public class InterviewController {
             @RequestParam("questions") List<String> questions,
             @RequestParam("durationSec") int durationSec,
             @RequestParam("questionCount") int questionCount,
-            @RequestParam(value = "targetsJson", required = false) String targetsJson
+            @RequestParam(value = "targetsJson", required = false) String targetsJson,
+            @RequestParam(value = "jobCategory", required = false) String jobCategory
     ) throws IOException {
 
         if (token == null || !token.startsWith("Bearer ")) {
@@ -84,7 +85,7 @@ public class InterviewController {
         }
 
         Long sessionId = interviewService.saveInterviewVoice(
-                userNum, files, questions, durationSec, questionCount
+                userNum, files, questions, durationSec, questionCount, jobCategory
         );
 
         interviewService.saveSessionTargets(sessionId, targets);

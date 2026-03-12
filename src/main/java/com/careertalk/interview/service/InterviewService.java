@@ -42,7 +42,8 @@ public class InterviewService {
             List<MultipartFile> files,
             List<String> questions,
             int durationSec,
-            int questionCount
+            int questionCount,
+            String jobCategory
     ) throws IOException {
 
         if (questionCount <= 0) throw new IllegalArgumentException("questionCount must be > 0");
@@ -59,10 +60,12 @@ public class InterviewService {
         // ✅ 추가: title 기본값
         session.setTitle("AI 모의면접");
 
+        session.setJobCategory(
+                jobCategory == null || jobCategory.isBlank() ? null : jobCategory.trim()
+        );
         session.setMode("VOICE");
         session.setStatus("ENDED");
         session = sessionRepository.save(session);
-
         String keyPrefix = "interview/" + session.getSessionId();
 
         // 2) turns + files 저장
