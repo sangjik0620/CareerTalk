@@ -53,7 +53,7 @@ public class PortfolioAnalysisController {
         return ResponseEntity.ok(response);
     }
 
-    /* 포트폴리오 분석 결과 삭제 (S3 파일 + DB) */
+    /* 포트폴리오 분석 결과 삭제  */
     @DeleteMapping("/{analysisId}")
     public ResponseEntity<String> deletePortfolioAnalysis(
             @PathVariable("analysisId") Long analysisId
