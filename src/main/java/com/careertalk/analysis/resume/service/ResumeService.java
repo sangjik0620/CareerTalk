@@ -61,7 +61,6 @@ public class ResumeService {
     @Value("classpath:prompts/resume-analysis-prompt.txt")
     private Resource systemPromptResource;
 
-    // ⭐ 추가: Portfolio와 동일하게 @Value로 주입
     @Value("${ai.model.name}")
     private String aiModelName;
 
@@ -154,7 +153,7 @@ public class ResumeService {
     }
 
     // ──────────────────────────────────────────────
-    // GET /api/resumes/{analysisId}/result  ⭐ 추가
+    // GET /api/resumes/{analysisId}/result
     // ──────────────────────────────────────────────
     @Transactional(readOnly = true)
     public ResumeAnalysisResponse getAnalysisResult(Long analysisId, Long currentUserNum) {
@@ -277,9 +276,9 @@ public class ResumeService {
                     .targetId(resumeId)
                     .targetJob(jobCategory)
                     .overallScore(overallScore)
-                    .oneLineReview(summaryDetail)   // ⭐ 한줄 총평 → oneLineReview
-                    .scoreJson(detailedEvalJson)    // ⭐ 항목별 점수 → scoreJson
-                    .ruleResultJson(feedbackJson)   // ⭐ 강점/약점/개선점 묶음 → ruleResultJson
+                    .oneLineReview(summaryDetail)   //  한줄 총평 → oneLineReview
+                    .scoreJson(detailedEvalJson)    //  항목별 점수 → scoreJson
+                    .ruleResultJson(feedbackJson)   //  강점/약점/개선점 묶음 → ruleResultJson
                     .expectedQuestionsJson(expectedQuestionsJson)
                     .status("SUCCESS")
                     .modelName(aiModelName)
@@ -303,7 +302,7 @@ public class ResumeService {
     private ResumeAnalysisResponse convertToResponseDto(
             AnalysisEntity analysis, String detailedPosition) throws JsonProcessingException {
 
-        // ⭐ scoreJson → detailedEvaluation 파싱
+        // scoreJson → detailedEvaluation 파싱
         JsonNode evalNode = objectMapper.readTree(analysis.getScoreJson());
         DetailedEvaluationDto detailedEvaluation = DetailedEvaluationDto.builder()
                 .jobFitScore(parseEvalItem(evalNode.get("jobFitScore")))
@@ -313,7 +312,7 @@ public class ResumeService {
                 .completenessScore(parseEvalItem(evalNode.get("completenessScore")))
                 .build();
 
-        // ⭐ ruleResultJson → feedback 노드에서 바로 꺼내기
+        // ruleResultJson → feedback 노드에서 바로 꺼내기
         JsonNode feedbackNode = objectMapper.readTree(analysis.getRuleResultJson());
         List<String> strengths    = objectMapper.readValue(feedbackNode.get("strengths").toString(),    new TypeReference<>() {});
         List<String> weaknesses   = objectMapper.readValue(feedbackNode.get("weaknesses").toString(),   new TypeReference<>() {});
@@ -329,7 +328,7 @@ public class ResumeService {
                 .targetJob(analysis.getTargetJob())
                 .detailedPosition(detailedPosition)
                 .overallScore(analysis.getOverallScore())
-                .summaryDetail(analysis.getOneLineReview()) // ⭐ oneLineReview에서 꺼내서 DTO의 summaryDetail로
+                .summaryDetail(analysis.getOneLineReview()) // oneLineReview에서 꺼내서 DTO의 summaryDetail로
                 .detailedEvaluation(detailedEvaluation)
                 .strengths(strengths)
                 .weaknesses(weaknesses)
@@ -364,5 +363,47 @@ public class ResumeService {
 
     private boolean isDocx(String filename) {
         return StringUtils.hasText(filename) && filename.toLowerCase().endsWith(".docx");
+    }
+
+    @Transactional
+    public void deleteResumeAnalysis(Long analysisId, Long currentUserId) {
+        // 삭제할 분석 기록 확인
+        AnalysisEntity analysis = analysisRepository.findById(analysisId)
+                .orElseThrow(() -> new RuntimeException("삭제할 분석 결과를 찾을 수 없습니다."));
+
+        // analysis의 usernum과 currentUserId와 비교하여 본인 분석기록인지 확인
+        if (!analysis.getUserNum().equals(currentUserId)){
+            throw new RuntimeException("해당 결과에 대한 삭제 권한이 없습니다.");
+        }
+
+        // 삭제할려고 하는 분석 기록의 타입이 RESUME인지 확인
+        if (!analysis.getTargetType().equals("RESUME")){
+            throw new RuntimeException("이력서 분석 결과가 아닙니다.");
+        }
+
+        // analysis에서 targetId 즉 ResumeId 가져오기
+        Long resumeId = analysis.getTargetId();
+
+        // resumeId로 ResumeEntity찾기
+        ResumeEntity resume = resumeRepository.findById(resumeId).orElse(null);
+
+        if (resume != null){
+            Long fileId = resume.getFileId();
+            // 찾은 ResumeEntity에서 해당 fileId로 FileEntity 찾기
+            FileEntity file = fileRepository.findById(fileId).orElse(null);
+            if (file != null){
+                try {
+                    // 찾은 S3Key값으로 S3서버에서 파일 삭제 요청
+                    s3Service.deleteFile(file.getS3Key());
+                } catch (Exception e) {
+                    log.error("파일 삭제 실패... (계속 진행)", e);
+                }
+                resumeRepository.deleteById(resumeId);
+                fileRepository.deleteById(fileId);
+            }
+
+            analysisRepository.deleteById(analysisId);
+        }
+
     }
 }
