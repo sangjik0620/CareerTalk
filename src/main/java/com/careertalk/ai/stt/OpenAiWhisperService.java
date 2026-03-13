@@ -28,16 +28,13 @@ public class OpenAiWhisperService {
     @Value("${openai.api-key}")
     private String apiKey;
 
-    /**
-     * @return transcript text
-     */
     public String transcribe(Path audioFilePath) throws Exception {
         FileSystemResource fileResource = new FileSystemResource(audioFilePath.toFile());
 
         MultiValueMap<String, Object> form = new LinkedMultiValueMap<>();
         form.add("model", "whisper-1");
         form.add("file", fileResource);
-        form.add("language", "ko"); // 선택이지만 한국어면 넣는 게 보통 도움됨
+        form.add("language", "ko");
 
         String raw = openai.post()
                 .uri("/v1/audio/transcriptions")

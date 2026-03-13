@@ -33,7 +33,7 @@ public class InterviewSessionTargetController {
     @Getter
     @AllArgsConstructor
     public static class SessionTargetDto {
-        private String targetType; // PORTFOLIO/RESUME/ESSAY
+        private String targetType;
         private Long targetId;
         private Long analysisId;
     }

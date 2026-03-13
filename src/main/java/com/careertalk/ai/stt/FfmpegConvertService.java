@@ -8,9 +8,6 @@ import java.nio.file.Path;
 @Service
 public class FfmpegConvertService {
 
-    /**
-     * webm -> wav (16kHz, mono)
-     */
     public Path toWav16kMono(Path input) throws Exception {
         Path output = Files.createTempFile("careertalk-stt-", ".wav");
 

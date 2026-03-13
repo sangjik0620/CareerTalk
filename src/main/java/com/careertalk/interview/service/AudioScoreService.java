@@ -33,43 +33,33 @@ public class AudioScoreService {
             JsonNode audioNode = objectMapper.readTree(turn.getAudioMetricsJson());
             JsonNode pyNode    = objectMapper.readTree(turn.getPythonMetricsJson());
 
-            // ===== audio_metrics_json =====
             Double durationSec   = getDouble(audioNode, "durationSec");
             Double silenceRatio  = getDouble(audioNode, "silenceRatio");
             Double speechRateWps = getDouble(audioNode, "speechRateWps");
             Double meanVolumeDb  = getDouble(audioNode, "meanVolumeDb");
             Integer wordCount    = getInt(audioNode, "wordCount");
 
-            // ===== python_metrics_json =====
-            // python_metrics_json 포맷 호환:
-            // 1) wrapper: { version, extracted:{...}, raw:{...} }
-            // 2) flat: { pitchMean, pitchStd, pitchCv, jitterLocal, shimmerLocal, ... }
-            // 3) raw nested: { pitch:{pitchMeanHz,...}, voiceQuality:{...}, durationSec }
             JsonNode extractedNode = (pyNode != null) ? pyNode.get("extracted") : null;
             JsonNode rawNode = (pyNode != null) ? pyNode.get("raw") : null;
 
-            // 1) extracted 우선
             Double pitchMean     = getDouble(extractedNode, "pitchMean");
             Double pitchStd      = getDouble(extractedNode, "pitchStd");
             Double pitchCv       = getDouble(extractedNode, "pitchCv");
             Double jitterLocal   = getDouble(extractedNode, "jitterLocal");
             Double shimmerLocal  = getDouble(extractedNode, "shimmerLocal");
 
-            // 2) flat fallback
             if (pitchMean == null) pitchMean = getDouble(pyNode, "pitchMean");
             if (pitchStd  == null) pitchStd  = getDouble(pyNode, "pitchStd");
             if (pitchCv   == null) pitchCv   = getDouble(pyNode, "pitchCv");
             if (jitterLocal == null) jitterLocal = getDouble(pyNode, "jitterLocal");
             if (shimmerLocal == null) shimmerLocal = getDouble(pyNode, "shimmerLocal");
 
-            // 3) raw nested fallback (FastAPI 원본)
             if (pitchMean == null) pitchMean = getDoubleNested(rawNode, "pitch", "pitchMeanHz");
             if (pitchStd  == null) pitchStd  = getDoubleNested(rawNode, "pitch", "pitchStdHz");
             if (pitchCv   == null) pitchCv   = getDoubleNested(rawNode, "pitch", "pitchCv");
             if (jitterLocal == null) jitterLocal = getDoubleNested(rawNode, "voiceQuality", "jitterLocal");
             if (shimmerLocal == null) shimmerLocal = getDoubleNested(rawNode, "voiceQuality", "shimmerLocal");
 
-            // ===== 1) Tremor =====
             TremorScoreResult tremor = tremorRiskScorer.score(
                     jitterLocal,
                     shimmerLocal,
@@ -80,7 +70,6 @@ public class AudioScoreService {
                     durationSec
             );
 
-            // ===== 2) Confidence =====
             ConfidenceScoreResult confidence = confidenceScorer.score(
                     meanVolumeDb,
                     silenceRatio,
@@ -91,7 +80,6 @@ public class AudioScoreService {
                     durationSec
             );
 
-            // ===== 3) Fluency =====
             FluencyScoreResult fluency = fluencyScorer.score(
                     speechRateWps,
                     silenceRatio,
@@ -99,7 +87,6 @@ public class AudioScoreService {
                     wordCount
             );
 
-            // ===== 4) Overall =====
             OverallVoiceScoreResult overall = overallVoiceScorer.score(
                     tremor.getTremorRiskScore(),
                     tremor.getAnalysisReliability(),
@@ -107,7 +94,6 @@ public class AudioScoreService {
                     confidence.getAnalysisReliability()
             );
 
-            // ===== 5) Feedback =====
             VoiceFeedbackResult feedback = voiceFeedbackGenerator.generate(
                     overall.getOverallVoiceScore(),
                     overall.getGrade(),
@@ -117,7 +103,6 @@ public class AudioScoreService {
                     fluency.getFluencyScore()
             );
 
-            // ===== 최종 JSON =====
             Map<String, Object> finalScores = new LinkedHashMap<>();
             finalScores.put("tremor", tremor);
             finalScores.put("confidence", confidence);

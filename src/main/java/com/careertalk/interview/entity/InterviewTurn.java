@@ -38,7 +38,6 @@ public class InterviewTurn {
     @Column(name = "stt_text")
     private String sttText;
 
-    // ✅ STT 상태/재시도/에러
     @Enumerated(EnumType.STRING)
     @Column(name = "stt_status", nullable = false, length = 20)
     private SttStatus sttStatus = SttStatus.PENDING;
@@ -71,13 +70,12 @@ public class InterviewTurn {
     @Column(name="audio_metrics_json", columnDefinition="JSON")
     private String audioMetricsJson;
 
-    @Column(name = "python_metrics_json", columnDefinition = "json") // TEXT면 columnDefinition 지워도 됨
+    @Column(name = "python_metrics_json", columnDefinition = "json")
     private String pythonMetricsJson;
 
     @Column(name = "audio_scores_json", columnDefinition = "json")
     private String audioScoresJson;
 
-    // ===== Turn Analysis 상태/재시도/에러 (FastAPI metrics) =====
     @Enumerated(EnumType.STRING)
     @Column(name = "turn_analysis_status", nullable = false, length = 20)
     private TurnAnalysisStatus turnAnalysisStatus = TurnAnalysisStatus.PENDING;
@@ -95,8 +93,6 @@ public class InterviewTurn {
     @Column(name = "turn_analysis_completed_at")
     private LocalDateTime turnAnalysisCompletedAt;
 
-
-    // ===== Turn Score 상태/재시도/에러 (Java scoring) =====
     @Enumerated(EnumType.STRING)
     @Column(name = "turn_score_status", nullable = false, length = 20)
     private TurnScoreStatus turnScoreStatus = TurnScoreStatus.PENDING;

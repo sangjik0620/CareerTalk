@@ -9,7 +9,6 @@ import static com.careertalk.interview.scoring.ScoreNormalizer.*;
 
 public class TremorRiskScorer {
 
-    // ----- piecewise 기준 (초기안) -----
     private static final double[] JITTER_T = {0.010, 0.020, 0.030, 0.040};
     private static final double[] JITTER_L = {0.10, 0.30, 0.60, 0.80, 1.00};
 
@@ -22,7 +21,6 @@ public class TremorRiskScorer {
     private static final double[] SILENCE_T = {0.10, 0.20, 0.35, 0.50};
     private static final double[] SILENCE_L = {0.10, 0.30, 0.60, 0.80, 1.00};
 
-    // ----- 가중치 -----
     private static final double W_JITTER = 0.40;
     private static final double W_SHIMMER = 0.35;
     private static final double W_PITCH   = 0.20;
@@ -35,20 +33,17 @@ public class TremorRiskScorer {
             Double shimmerLocal,
             Double pitchMean,
             Double pitchStd,
-            Double pitchCvProvided,   // 있으면 이걸 우선 사용
+            Double pitchCvProvided,
             Double silenceRatio,
             Double durationSec
     ) {
-        // 1) pitchCv 계산 (우선순위: provided > std/mean)
         double pitchCv = computePitchCv(pitchMean, pitchStd, pitchCvProvided);
 
-        // 2) Risk 정규화(0~1)
         double rJitter  = piecewiseRisk(nvl(jitterLocal), JITTER_T, JITTER_L);
         double rShimmer = piecewiseRisk(nvl(shimmerLocal), SHIMMER_T, SHIMMER_L);
         double rPitchCv = piecewiseRisk(pitchCv, PITCHCV_T, PITCHCV_L);
         double rSilence = piecewiseRisk(nvl(silenceRatio), SILENCE_T, SILENCE_L);
 
-        // 3) 가중합
         double weightedRisk01 = clamp01(
                 W_JITTER * rJitter +
                         W_SHIMMER * rShimmer +
@@ -58,13 +53,10 @@ public class TremorRiskScorer {
 
         int tremorRiskScore = clampInt((int) Math.round(100.0 * weightedRisk01), 0, 100);
 
-        // 4) 신뢰도 계산
         double reliability = computeReliability(durationSec, silenceRatio, pitchMean, pitchStd, jitterLocal, shimmerLocal);
 
-        // 5) flags 생성
         List<FlagItem> flags = buildFlags(jitterLocal, shimmerLocal, pitchCv, silenceRatio, durationSec);
 
-        // 6) riskComponents 구성(디버깅/설명용)
         Map<String, Double> components = new LinkedHashMap<>();
         components.put("rJitter", round2(rJitter));
         components.put("rShimmer", round2(rShimmer));
@@ -85,9 +77,9 @@ public class TremorRiskScorer {
         if (pitchCvProvided != null && isFinite(pitchCvProvided)) {
             return Math.max(0.0, pitchCvProvided);
         }
-        if (pitchMean == null || pitchStd == null) return 0.12; // 중립값(보수적)
+        if (pitchMean == null || pitchStd == null) return 0.12;
         if (!isFinite(pitchMean) || !isFinite(pitchStd)) return 0.12;
-        if (pitchMean <= 1e-9) return 0.12; // mean 0 방지
+        if (pitchMean <= 1e-9) return 0.12;
         double cv = pitchStd / pitchMean;
         if (!isFinite(cv)) return 0.12;
         return Math.max(0.0, cv);
@@ -101,15 +93,12 @@ public class TremorRiskScorer {
         double dur = nvl(durationSec);
         double sil = nvl(silenceRatio);
 
-        // 길이 보정
         if (dur < 3.0) r *= 0.5;
         else if (dur < 6.0) r *= 0.7;
 
-        // 유효 발화 부족(침묵 과다)
         if (sil > 0.60) r *= 0.5;
         else if (sil > 0.45) r *= 0.7;
 
-        // 핵심 지표 누락/비정상일 때
         if (!isFinite(pitchMean) || !isFinite(pitchStd)) r *= 0.8;
         if (!isFinite(jitterLocal) || !isFinite(shimmerLocal)) r *= 0.8;
 
@@ -131,7 +120,6 @@ public class TremorRiskScorer {
         if (sil >= 0.35) flags.add(flag("SILENCE_HIGH", "말 사이 멈춤이 잦아 불안하게 들릴 수 있어요."));
         if (dur > 0 && dur < 6.0) flags.add(flag("LOW_SAMPLE", "분석 구간이 짧아 점수 신뢰도가 낮을 수 있어요."));
 
-        // 파이썬 지표가 0/누락으로 들어오는 경우 감지(필요시 튜닝)
         if (!isFinite(jitterLocal) || !isFinite(shimmerLocal)) {
             flags.add(flag("PY_METRIC_MISSING", "일부 음성 안정성 지표가 누락되어 점수 정확도가 낮을 수 있어요."));
         }

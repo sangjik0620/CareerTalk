@@ -20,7 +20,7 @@ public class InterviewEvaluationResultResponse {
     private InterviewAnalysis interviewAnalysis;
     private Comparison comparison;
     private Competency competency;
-    private JsonNode evaluation;   // 혹은 resultJson
+    private JsonNode evaluation;
 
     @Data
     @NoArgsConstructor
@@ -148,7 +148,7 @@ public class InterviewEvaluationResultResponse {
     public static class SttAnalysis {
         private Integer totalWords;
         private Double averageResponseTime;
-        private Map<String, Integer> keywordUsage; // technical/soft/company
+        private Map<String, Integer> keywordUsage;
         private Integer sentimentScore;
     }
 
@@ -170,7 +170,7 @@ public class InterviewEvaluationResultResponse {
     @Builder
     public static class Comparison {
         private List<ScorePoint> scoreHistory;
-        private Map<String, CategoryCompare> categoryComparison; // technical/communication/...
+        private Map<String, CategoryCompare> categoryComparison;
         private Integer percentileRank;
     }
 

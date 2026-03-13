@@ -14,9 +14,9 @@ public class AsyncConfig {
     @Bean(name = "analysisExecutor")
     public Executor analysisExecutor() {
         ThreadPoolTaskExecutor exec = new ThreadPoolTaskExecutor();
-        exec.setCorePoolSize(4);      // 평상시 유지 스레드
-        exec.setMaxPoolSize(8);       // 피크 시 최대
-        exec.setQueueCapacity(200);   // 대기열
+        exec.setCorePoolSize(4);
+        exec.setMaxPoolSize(8);
+        exec.setQueueCapacity(200);
         exec.setThreadNamePrefix("analysis-");
         exec.initialize();
         return exec;

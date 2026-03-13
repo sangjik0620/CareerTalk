@@ -113,7 +113,6 @@ public class InterviewService {
 
     @Transactional(readOnly = true)
     public InterviewSessionResultResponse getVoiceResult(Long sessionId, Long userNum) {
-        // 1) 세션 확인 및 본인 여부 검증
         InterviewSession session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("세션을 찾을 수 없습니다."));
 
@@ -121,13 +120,11 @@ public class InterviewService {
             throw new RuntimeException("해당 면접 기록에 접근할 권한이 없습니다.");
         }
 
-        // 2) AI 평가 결과 조회
         InterviewEvaluation evaluation = evaluationRepository.findBySessionId(sessionId)
-                .orElse(null); // 아직 분석 전일 수 있으므로 null 허용
+                .orElse(null);
 
         List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
 
-        // 3) 음성 파일 조회를 위한 ID 추출
         List<Long> fileIds = turns.stream()
                 .map(InterviewTurn::getAnswerAudioFileId)
                 .filter(id -> id != null)
@@ -140,7 +137,6 @@ public class InterviewService {
                 : fileRepository.findAllById(fileIds).stream()
                 .collect(java.util.stream.Collectors.toMap(FileEntity::getFileId, f -> f));
 
-        // 4) 응답용 아이템 리스트 생성
         List<InterviewSessionResultResponse.TurnItem> items = turns.stream().map(t -> {
             String url = null;
             Long fid = t.getAnswerAudioFileId();
@@ -153,13 +149,11 @@ public class InterviewService {
             return new InterviewSessionResultResponse.TurnItem(t.getTurnNo(), t.getAiQuestion(), url);
         }).toList();
 
-        // 5) 모든 데이터를 합친 최종 응답 반환
         return InterviewSessionResultResponse.builder()
                 .sessionId(session.getSessionId())
                 .title(session.getTitle())
                 .status(session.getStatus())
                 .mode(session.getMode())
-                // Evaluation 데이터 매핑
                 .overallScore(evaluation != null ? evaluation.getOverallScore() : 0)
                 .strengths(evaluation != null ? evaluation.getStrengths() : "분석 데이터가 없습니다.")
                 .weaknesses(evaluation != null ? evaluation.getWeaknesses() : "-")
@@ -226,7 +220,6 @@ public class InterviewService {
                 ? List.of()
                 : fileRepository.findAllById(audioFileIds);
 
-        // 1. S3 실제 오디오 파일 삭제
         for (FileEntity file : audioFiles) {
             if (file == null) continue;
             if (file.getS3Key() == null || file.getS3Key().isBlank()) continue;
@@ -234,17 +227,14 @@ public class InterviewService {
             s3Service.deleteFile(file.getS3Key());
         }
 
-        // 2. 하위 데이터 삭제
         evaluationRepository.deleteBySessionId(sessionId);
         sessionTargetRepository.deleteBySessionId(sessionId);
         turnRepository.deleteBySessionId(sessionId);
 
-        // 3. files 테이블 삭제
         if (!audioFileIds.isEmpty()) {
             fileRepository.deleteAllByIdInBatch(audioFileIds);
         }
 
-        // 4. 마지막에 세션 삭제
         sessionRepository.deleteBySessionId(sessionId);
     }
 }

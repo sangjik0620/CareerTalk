@@ -23,18 +23,15 @@ public class InterviewSession {
     @Column(name = "analysis_id")
     private Long analysisId;
 
-    // DB에서 DEFAULT 'AI 모의면접' 줬으니 null로 insert해도 됨
     @Column(name = "title", nullable = false)
     private String title = "AI 모의면접";
 
     @Column(name = "job_category")
     private String jobCategory;
 
-    // "TEXT" or "VOICE"
     @Column(name = "mode", nullable = false)
     private String mode = "VOICE";
 
-    // "READY" / "IN_PROGRESS" / "ENDED"
     @Column(name = "status", nullable = false)
     private String status = "READY";
 

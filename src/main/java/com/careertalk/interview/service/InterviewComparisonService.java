@@ -29,19 +29,16 @@ public class InterviewComparisonService {
     public ComparisonResponse buildComparison(Long sessionId, JsonNode evaluationJson) {
         InterviewSession session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("세션이 없습니다. sessionId=" + sessionId));
-
         InterviewEvaluation currentEval = evaluationRepository.findBySessionId(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("평가 데이터가 없습니다. sessionId=" + sessionId));
 
         Long userNum = session.getUserNum();
         Integer overallScore = resolveOverallScore(currentEval, evaluationJson);
-
         List<ScoreHistoryItem> scoreHistory = buildScoreHistory(
                 userNum,
                 session.getCreatedAt(),
                 sessionId
         );
-
         Integer percentileRank = resolvePercentileRank(sessionId, overallScore);
 
         Map<String, CategoryComparisonItem> categoryComparison =
@@ -52,7 +49,6 @@ public class InterviewComparisonService {
                         currentEval,
                         evaluationJson
                 );
-
         return ComparisonResponse.builder()
                 .percentileRank(percentileRank)
                 .scoreHistory(scoreHistory)

@@ -21,16 +21,11 @@ public class S3DownloadService {
     @Value("${aws.s3.bucket}")
     private String bucket;
 
-    /**
-     * @param s3Key 예: careertalk/interview/4/xxx.webm
-     * @return 임시파일 경로 (요청 끝나면 반드시 삭제 권장)
-     */
     public Path downloadToTempFile(String s3Key, String originalFilename) throws Exception {
         String safeName = (originalFilename == null || originalFilename.isBlank())
                 ? "audio.webm"
                 : originalFilename;
 
-        // 확장자 유지
         String suffix = safeName.contains(".")
                 ? safeName.substring(safeName.lastIndexOf('.'))
                 : ".webm";

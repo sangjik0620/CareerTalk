@@ -9,7 +9,6 @@ public class OverallVoiceScorer {
 
     private static final String VERSION = "OV-1.0";
 
-    // weights
     private static final double W_CONF = 0.55;
     private static final double W_STAB = 0.45;
 
@@ -29,8 +28,8 @@ public class OverallVoiceScorer {
 
         double stabilityScore = clamp01((100.0 - tremor) / 100.0) * 100.0;
 
-        double raw = W_CONF * conf + W_STAB * stabilityScore;          // 0~100
-        double applied = raw * overallReliability;                     // 0~100
+        double raw = W_CONF * conf + W_STAB * stabilityScore;
+        double applied = raw * overallReliability;
 
         int overall = clampInt((int) Math.round(applied), 0, 100);
 
@@ -50,7 +49,6 @@ public class OverallVoiceScorer {
     }
 
     private String grade(int score, double reliability) {
-        // reliability 낮으면 grade 한 단계 낮추는 느낌으로
         int s = score;
         if (reliability < 0.55) s -= 8;
 

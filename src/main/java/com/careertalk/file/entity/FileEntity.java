@@ -19,7 +19,6 @@ public class FileEntity {
     @Column(name = "user_num", nullable = false)
     private Long userNum;
 
-    // RESUME / ESSAY / PORTFOLIO / AUDIO
     @Column(name = "file_type", nullable = false)
     private String fileType;
 
@@ -48,7 +47,6 @@ public class FileEntity {
     @Column(name = "checksum", length = 128)
     private String checksum;
 
-    // ACTIVE / DELETED
     @Column(name = "status", nullable = false)
     private String status;
 }

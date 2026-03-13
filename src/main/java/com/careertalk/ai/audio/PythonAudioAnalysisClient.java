@@ -17,11 +17,6 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.TimeoutException;
 
-/**
- * Python(FastAPI) 음성 분석 서비스 호출 클라이언트
- * - POST {baseUrl}/analyze-audio (multipart file 업로드)
- * - return: JSON(JsonNode)
- */
 @Service
 @RequiredArgsConstructor
 public class PythonAudioAnalysisClient {
@@ -30,12 +25,6 @@ public class PythonAudioAnalysisClient {
 
     @Value("${audio.analysis.base-url:http://localhost:8001}")
     private String baseUrl;
-
-    /**
-     * @param wavPath STT 후 변환된 WAV 파일 경로
-     * @return Python 서비스 분석 결과 JSON
-     */
-
 
     public JsonNode analyzeWav(Path wavPath) {
         FileSystemResource fileResource = new FileSystemResource(wavPath.toFile());

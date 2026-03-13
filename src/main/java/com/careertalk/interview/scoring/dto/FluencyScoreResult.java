@@ -11,8 +11,8 @@ import java.util.Map;
 @Builder
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class FluencyScoreResult {
-    private int fluencyScore;            // 0~100
-    private double analysisReliability;  // 0~1
+    private int fluencyScore;
+    private double analysisReliability;
     private Map<String, Double> components;
-    private String version;              // "FL-1.0"
+    private String version;
 }

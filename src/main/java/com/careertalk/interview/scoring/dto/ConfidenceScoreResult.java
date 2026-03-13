@@ -16,10 +16,11 @@ import java.util.Map;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ConfidenceScoreResult {
 
-    private int confidenceScore;          // 0~100
-    private double analysisReliability;   // 0~1
+    private int confidenceScore;
 
-    private Map<String, Double> components;  // 내부 점수 구성요소
+    private double analysisReliability;
+
+    private Map<String, Double> components;
 
     private List<FlagItem> flags;
 

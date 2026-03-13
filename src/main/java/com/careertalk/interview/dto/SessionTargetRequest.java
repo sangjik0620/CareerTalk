@@ -6,7 +6,7 @@ import lombok.Setter;
 @Getter
 @Setter
 public class SessionTargetRequest {
-    private String targetType; // "RESUME" | "ESSAY" | "PORTFOLIO"
+    private String targetType;
     private Long targetId;
     private Long analysisId;
 }
