@@ -6,11 +6,15 @@ import com.careertalk.auth.dto.SocialSignupRequestDTO;
 import com.careertalk.auth.dto.UpdateRequestDTO;
 import com.careertalk.auth.entity.Member;
 import com.careertalk.auth.repository.MemberRepository;
+import com.careertalk.payment.service.QuotaService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.util.List;
+import java.util.UUID;
+
 import com.careertalk.auth.jwt.JwtUtil;
 
 @Service
@@ -21,6 +25,7 @@ public class MemberService {
     private final MemberRepository memberRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
+    private final QuotaService quotaService;
 
     /* 일반 회원가입 */
     public String signup(SignupRequestDTO signupRequestDTO) {
@@ -29,11 +34,21 @@ public class MemberService {
             throw new RuntimeException("이미 동일한 이메일로 가입된 계정이 존재합니다.");
         }
 
+        // 1-1. 아이디 중복 체크
+        if (memberRepository.findByLoginId(signupRequestDTO.getLoginId()).isPresent()) {
+            throw new RuntimeException("이미 사용 중인 아이디입니다.");
+        }
+
+        // 1-2. 닉네임 중복 체크
+        if (memberRepository.findByNickname(signupRequestDTO.getNickname()).isPresent()) {
+            throw new RuntimeException("이미 사용 중인 닉네임입니다.");
+        }
+
         // 2. 비밀번호 암호화 및 엔티티 변환
         Member user = Member.builder()
                 .loginId(signupRequestDTO.getLoginId())
                 .email(signupRequestDTO.getEmail())
-                .password(passwordEncoder.encode(signupRequestDTO.getPassword())) // 암호화!
+                .password(passwordEncoder.encode(signupRequestDTO.getPassword()))
                 .name(signupRequestDTO.getName())
                 .nickname(signupRequestDTO.getNickname())
                 .phone(signupRequestDTO.getPhone())
@@ -43,7 +58,11 @@ public class MemberService {
                 .build();
 
         // 3. DB 저장
-        memberRepository.save(user);
+        Member savedUser = memberRepository.save(user);
+
+        // 4. 신규 가입자 기본 이용권 생성
+        quotaService.createInitialQuota(savedUser.getUserNum());
+
         return "회원가입 성공";
     }
 
@@ -58,11 +77,11 @@ public class MemberService {
             throw new RuntimeException("비밀번호가 일치하지 않습니다.");
         }
 
-        // 3. 로그인 성공 시 유저 객체 반환
-//        return user;
+        // 3. 로그인 성공 시 JWT 반환
         return jwtUtil.createToken(user.getLoginId(), "ROLE_USER");
     }
 
+    /* 소셜 회원가입 완료 */
     public Member socialSignupComplete(SocialSignupRequestDTO dto) {
 
         if (memberRepository.findByLoginId(dto.getLoginId()).isPresent()) {
@@ -83,27 +102,29 @@ public class MemberService {
                 .phone(dto.getPhone())
                 .birthDate(dto.getBirthDate())
                 .targetJob(dto.getTargetJob())
-                .password(passwordEncoder.encode("SOCIAL_AUTH_" + java.util.UUID.randomUUID()))
+                .password(passwordEncoder.encode("SOCIAL_AUTH_" + UUID.randomUUID()))
                 .status("ACTIVE")
                 .build();
 
-        return memberRepository.save(user);
+        // 저장
+        Member savedUser = memberRepository.save(user);
+
+        // 신규 소셜 가입자 기본 이용권 생성
+        quotaService.createInitialQuota(savedUser.getUserNum());
+
+        return savedUser;
     }
 
     public boolean isDuplicateNormalEmail(String email) {
-        // 1. findByEmail 대신 findAllByEmail(리스트 반환)을 사용하여 에러 원천 차단
         List<Member> members = memberRepository.findAllByEmail(email);
 
-        // 2. 검색된 결과가 없으면 당연히 중복 아님
         if (members.isEmpty()) return false;
 
-        // 3. 검색된 모든 계정 중 하나라도 '일반 계정'인지 확인
         return members.stream().anyMatch(member -> {
             String loginId = member.getLoginId();
-            // 소셜 계정(google_, kakao_, naver_)이 아닌 경우만 true
-            return !(loginId.startsWith("google_") ||
-                    loginId.startsWith("kakao_") ||
-                    loginId.startsWith("naver_"));
+            return !(loginId.startsWith("google_")
+                    || loginId.startsWith("kakao_")
+                    || loginId.startsWith("naver_"));
         });
     }
 
@@ -124,6 +145,7 @@ public class MemberService {
                 throw new RuntimeException("이미 사용 중인 닉네임입니다.");
             }
         }
+
         member.updateInfo(dto.getName(), dto.getNickname(), dto.getEmail());
     }
 
@@ -148,5 +170,4 @@ public class MemberService {
                 .orElseThrow(() -> new RuntimeException("회원 없음"));
         memberRepository.delete(member);
     }
-
 }
