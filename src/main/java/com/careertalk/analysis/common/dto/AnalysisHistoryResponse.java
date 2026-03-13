@@ -23,9 +23,9 @@ public class AnalysisHistoryResponse {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class Item {
-        private Long id;          // 프론트 선택용
-        private Long targetId;    // resumes.resume_id / essays.essay_id / portfolios.portfolio_id
-        private Long analysisId;  // analysis.analysis_id
+        private Long id;
+        private Long targetId;
+        private Long analysisId;
         private String title;
         private String fileName;
         private String analyzedAt;

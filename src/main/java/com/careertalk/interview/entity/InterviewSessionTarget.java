@@ -30,7 +30,6 @@ public class InterviewSessionTarget {
     @Column(name = "session_id", nullable = false)
     private Long sessionId;
 
-    // PORTFOLIO / RESUME / ESSAY
     @Column(name = "target_type", nullable = false, length = 20)
     private String targetType;
 

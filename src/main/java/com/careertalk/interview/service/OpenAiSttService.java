@@ -32,7 +32,6 @@ public class OpenAiSttService {
         byte[] bytes = Files.readAllBytes(audioPath);
         String filename = audioPath.getFileName().toString();
 
-        // 파일 파트 (파일명 반드시 넣어주는 게 중요)
         ByteArrayResource fileResource = new ByteArrayResource(bytes) {
             @Override
             public String getFilename() {
@@ -41,12 +40,9 @@ public class OpenAiSttService {
         };
 
         MultiValueMap<String, Object> formData = new LinkedMultiValueMap<>();
-        formData.add("model", "whisper-1"); // 또는 gpt-4o-mini-transcribe 등 :contentReference[oaicite:2]{index=2}
+        formData.add("model", "whisper-1");
         formData.add("file", fileResource);
-        // 옵션: formData.add("language", "ko"); (선택)
-        // 옵션: formData.add("response_format", "json"); (whisper-1은 json/text/srt/vtt 등 지원) :contentReference[oaicite:3]{index=3}
 
-        // 응답은 기본적으로 { "text": "..." } 형태(json)로 옴
         return webClient.post()
                 .uri("/v1/audio/transcriptions")
                 .contentType(MediaType.MULTIPART_FORM_DATA)

@@ -30,11 +30,6 @@ public class InterviewOpenAiService {
     @Value("${ai.model.name}")
     private String model;
 
-    /**
-     * JSON-only 결과가 필요할 때 사용.
-     * - 모델 출력 텍스트를 JSON 파싱
-     * - 파싱 실패하면 {error, raw}를 리턴 (서버 템플릿 대체 금지)
-     */
     public JsonNode callJsonOnly(String systemPrompt, String userPrompt) {
         String text = callText(systemPrompt, userPrompt);
 
@@ -52,11 +47,6 @@ public class InterviewOpenAiService {
         }
     }
 
-    /**
-     * Responses API 호출 -> 모델 출력 텍스트 반환
-     * - input을 메시지 배열 형태로 전송
-     * - output_text 우선, 없으면 output[].content[].text 합침
-     */
     public String callText(String systemPrompt, String userPrompt) {
         ensureConfig();
 
@@ -80,7 +70,6 @@ public class InterviewOpenAiService {
             throw new IllegalStateException("serialize request failed", e);
         }
 
-        // 호출 여부/중복 여부 확인용
         log.info("[LLM] OpenAI request start. model={}, url={}, payloadBytes={}",
                 model, apiUrl, reqJson.getBytes(StandardCharsets.UTF_8).length);
 
@@ -122,7 +111,6 @@ public class InterviewOpenAiService {
                 return merged;
             }
 
-            // 그래도 없으면 전체 JSON 반환 (디버깅)
             log.warn("[LLM] OpenAI response has no output_text/content. model={}, bodyPreview={}",
                     model, shorten(resBody, 300));
             return root.toString();
@@ -133,10 +121,6 @@ public class InterviewOpenAiService {
             throw new IllegalStateException("parse OpenAI response failed: " + e.getMessage(), e);
         }
     }
-
-    // ─────────────────────────────────────────────────────────────
-    // Helpers
-    // ─────────────────────────────────────────────────────────────
 
     private ObjectNode message(String role, String text) {
         ObjectNode msg = objectMapper.createObjectNode();

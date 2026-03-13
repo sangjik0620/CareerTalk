@@ -46,25 +46,16 @@ public class InterviewEvaluationService {
     @Value("classpath:prompts/interview_evaluation.txt")
     private Resource interviewEvalSystemPrompt;
 
-    /**
-     * 세션 종합 분석
-     * - LLM은 1회만 호출
-     * - LLM 응답의 questionResponses는 interview_turn.feedback_json 으로 분리 저장
-     * - result_json 에는 세션 종합 정보만 저장
-     */
     public void runAnalysisInternal(Long sessionId) throws Exception {
         InterviewSession session = sessionRepository.findById(sessionId)
                 .orElseThrow(() -> new NoSuchElementException("session not found"));
 
         List<InterviewTurn> turns = turnRepository.findBySessionIdOrderByTurnNoAsc(sessionId);
 
-        // 1) 서버 기본 구조 생성 (세션 종합 결과만)
         ObjectNode evaluation = buildEvaluationSkeleton(session, turns);
 
-        // 2) LLM 결과 merge + turn.feedback_json 저장
         applyLlmInsights(evaluation, session, turns);
 
-        // 3) 총점 계산: 이제 turn.feedback_json 의 score 평균으로 계산
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
         ObjectNode comparison = (ObjectNode) evaluation.with("comparison");
         JsonNode competency = evaluation.path("competency");
@@ -100,7 +91,6 @@ public class InterviewEvaluationService {
 
         comparison.put("percentileRank", percentileRank);
 
-        // 4) 세션 result_json 저장
         saveEvaluationResult(sessionId, overall, evaluation);
     }
 
@@ -141,21 +131,14 @@ public class InterviewEvaluationService {
     public String getAnalysisStatus(Long sessionId) {
         String status = evaluationRepository.findAnalysisStatusBySessionId(sessionId);
         if (status == null || status.isBlank()) {
-//            System.out.println("[STATUS] no evaluation row for sessionId=" + sessionId);
             return "PENDING";
         }
-//        System.out.println("[STATUS] sessionId=" + sessionId + ", status=" + status);
         return status;
     }
 
-    /**
-     * result_json skeleton 생성
-     * - questionResponses 는 더 이상 session result_json 에 넣지 않음
-     */
     private ObjectNode buildEvaluationSkeleton(InterviewSession session, List<InterviewTurn> turns) {
         ObjectNode root = objectMapper.createObjectNode();
 
-        // interviewInfo
         ObjectNode info = root.putObject("interviewInfo");
         if (session.getCreatedAt() != null) {
             info.put("date", session.getCreatedAt().toLocalDate().toString());
@@ -195,7 +178,6 @@ public class InterviewEvaluationService {
 
         int avgRespSec = respSecCount == 0 ? 0 : (int) Math.round(totalRespSec * 1.0 / respSecCount);
 
-        // interviewAnalysis
         ObjectNode interview = root.putObject("interviewAnalysis");
         interview.set("voiceCoaching", objectMapper.createArrayNode());
 
@@ -211,7 +193,6 @@ public class InterviewEvaluationService {
 
         sttAnalysis.put("overallFeedback", "");
 
-        // summary
         ObjectNode summary = root.putObject("summary");
         summary.put("answeredQuestions", answered);
         summary.put("totalQuestions", total);
@@ -237,7 +218,6 @@ public class InterviewEvaluationService {
         summary.set("weaknesses", objectMapper.createArrayNode());
         summary.set("nextActions", objectMapper.createArrayNode());
 
-        // competency
         ObjectNode competency = root.putObject("competency");
         competency.set(
                 "technical",
@@ -249,7 +229,6 @@ public class InterviewEvaluationService {
         );
         competency.set("improvements", objectMapper.createArrayNode());
 
-        // comparison
         ObjectNode comparison = root.putObject("comparison");
         comparison.putNull("percentileRank");
         comparison.set("scoreHistory", objectMapper.createArrayNode());
@@ -259,11 +238,6 @@ public class InterviewEvaluationService {
         return root;
     }
 
-    /**
-     * LLM 1회 호출
-     * - summary / competency / voiceCoaching 는 session result_json 에 merge
-     * - questionResponses 는 turn.feedback_json 으로 저장
-     */
     private void applyLlmInsights(ObjectNode evaluation, InterviewSession session, List<InterviewTurn> turns) {
         ObjectNode meta = evaluation.with("meta");
         meta.put("llmProvider", "openai");
@@ -482,7 +456,6 @@ public class InterviewEvaluationService {
 
         sttAnalysis.put("sentimentScore", clamp0_100(outSummary.path("sentimentScore").asInt(0)));
 
-        // questionResponses 는 turn.feedback_json 으로 저장
         saveQuestionResponsesToTurns(turns, outInterview.path("questionResponses"));
 
         meta.put("llmStatus", "OK");
@@ -513,10 +486,6 @@ public class InterviewEvaluationService {
         return clamp0_100((int) Math.round(percentile));
     }
 
-    /**
-     * LLM questionResponses -> interview_turn.feedback_json 저장
-     * feedback_json 은 기존값 merge 없이 turn별로 새로 생성하여 저장한다.
-     */
     private void saveQuestionResponsesToTurns(List<InterviewTurn> turns, JsonNode outArr) {
         if (outArr == null || !outArr.isArray()) {
             log.warn("[LLM MERGE] questionResponses is empty or not array");
@@ -939,10 +908,6 @@ public class InterviewEvaluationService {
         }
     }
 
-    /**
-     * 총점은 세션 result_json.questionResponses 가 아니라
-     * interview_turn.feedback_json.score 평균으로 계산
-     */
     private int computeOverallScore(List<InterviewTurn> turns, int totalQuestions, JsonNode competency) {
         double contentScore = computeContentScore(turns);
         double voiceScore = computeVoiceScore(turns);

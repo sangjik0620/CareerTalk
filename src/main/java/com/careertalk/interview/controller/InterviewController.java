@@ -121,10 +121,9 @@ public class InterviewController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(Map.of("message", "사용자를 찾을 수 없습니다."));
         }
-        Long userNum = member.getUserNum(); // ✨ 여기서 얻은 유저 번호가 핵심!
+        Long userNum = member.getUserNum();
 
         String status = evaluationService.getAnalysisStatus(sessionId);
-//        log.info("sessionId: {}, status : {}", sessionId, status);
 
         if (!"DONE".equalsIgnoreCase(status)) {
             return ResponseEntity.status(202).body(Map.of(

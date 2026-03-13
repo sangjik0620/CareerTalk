@@ -20,17 +20,14 @@ public class InterviewAnalysisWorker {
                 Thread.currentThread().getName());
 
         try {
-            // 1) 턴별 STT + 음성분석 + 턴 점수
             log.info("[ANALYSIS] turn pipeline start sessionId={}", sessionId);
             turnSttService.processSessionTurns(sessionId);
             log.info("[ANALYSIS] turn pipeline done sessionId={}", sessionId);
 
-            // 2) 세션 종합 LLM 분석
             log.info("[ANALYSIS] LLM analysis start sessionId={}", sessionId);
             interviewEvaluationService.runAnalysisInternal(sessionId);
             log.info("[ANALYSIS] LLM analysis done sessionId={}", sessionId);
 
-            // 3) 완료 처리
             interviewEvaluationService.markDone(sessionId);
             log.info("[ANALYSIS] worker done sessionId={}", sessionId);
 

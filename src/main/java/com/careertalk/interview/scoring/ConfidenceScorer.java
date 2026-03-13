@@ -9,7 +9,6 @@ public class ConfidenceScorer {
 
     private static final String VERSION = "CF-1.0";
 
-    // 가중치
     private static final double W_VOL  = 0.25;
     private static final double W_SIL  = 0.30;
     private static final double W_RATE = 0.25;
@@ -29,16 +28,12 @@ public class ConfidenceScorer {
         double sil  = nvl(silenceRatio);
         double rate = nvl(speechRateWps);
 
-        // 1️⃣ 음량 (-35dB ~ -20dB 구간)
         double cVolume = ScoreNormalizer.linearClamp(vol, -35.0, -20.0);
 
-        // 2️⃣ 침묵비율 (0.10 이하면 좋고, 0.50 이상이면 나쁨)
         double cSilence = 1.0 - ScoreNormalizer.linearClamp(sil, 0.10, 0.50);
 
-        // 3️⃣ 말속도 (2.0~3.5 WPS 적정)
         double cRate = ScoreNormalizer.bandPass(rate, 2.0, 3.5, 1.0, 5.0);
 
-        // 4️⃣ 안정성 (tremor 요인 반전)
         double rPitch = ScoreNormalizer.piecewiseRisk(nvl(pitchCv),
                 new double[]{0.08,0.12,0.18,0.25},
                 new double[]{0.10,0.30,0.60,0.80,1.00});

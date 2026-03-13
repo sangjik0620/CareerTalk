@@ -275,7 +275,6 @@ public class TurnSttService {
     }
 
     private void runTurnScoreStep(InterviewTurn turn, TurnSttRequest req) throws Exception {
-        // analysis가 DONE이어야 score 가능
         if (turn.getTurnAnalysisStatus() != TurnAnalysisStatus.DONE) {
             throw new IllegalStateException("Cannot score: turn_analysis_status is not DONE");
         }
@@ -357,7 +356,6 @@ public class TurnSttService {
             try {
                 log.info("[STT] start turnId={}, turnNo={}", turn.getTurnId(), turn.getTurnNo());
 
-                // 이미 완료된 턴이면 스킵
                 if (turn.getSttStatus() == SttStatus.SUCCESS
                         && turn.getTurnAnalysisStatus() == TurnAnalysisStatus.DONE
                         && turn.getTurnScoreStatus() == TurnScoreStatus.DONE) {
@@ -365,14 +363,13 @@ public class TurnSttService {
                     continue;
                 }
 
-                // 오디오 파일이 없으면 스킵
                 if (turn.getAnswerAudioFileId() == null) {
                     log.warn("[STT] skip no answerAudioFileId turnId={}", turn.getTurnId());
                     continue;
                 }
 
                 TurnSttRequest req = new TurnSttRequest();
-                req.setToWav(true); // Python 음성분석까지 같이 돌릴 거면 true
+                req.setToWav(true);
 
                 runStt(turn.getTurnId(), req);
 

@@ -42,7 +42,6 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
             @Param("resultJson") String resultJson
     );
 
-    // 상태 조회
     @Query(value = """
             SELECT analysis_status
             FROM interview_evaluations
@@ -50,7 +49,6 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
             """, nativeQuery = true)
     String findAnalysisStatusBySessionId(@Param("sessionId") Long sessionId);
 
-    // 상태 업데이트
     @Modifying
     @Transactional
     @Query(value = """

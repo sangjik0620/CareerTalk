@@ -9,7 +9,7 @@ import lombok.*;
 public class FileUploadResponse {
     private Long fileId;
     private String originalName;
-    private String fileUrl;     // S3 URL or presigned URL
-    private String s3Key;       // 저장 키
-    private String message;     // optional
+    private String fileUrl;
+    private String s3Key;
+    private String message;
 }

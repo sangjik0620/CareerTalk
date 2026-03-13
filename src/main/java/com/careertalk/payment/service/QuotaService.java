@@ -105,8 +105,8 @@ public class QuotaService {
 
         quotaRepository.save(UserUsageQuota.builder()
                 .userNum(userNum)
-                .freeAnalysisRemaining(2)   // 원하는 기본값
-                .freeMockRemaining(1)       // 원하는 기본값
+                .freeAnalysisRemaining(2)
+                .freeMockRemaining(1)
                 .paidAnalysisRemaining(0)
                 .paidMockRemaining(0)
                 .build());

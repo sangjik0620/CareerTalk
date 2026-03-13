@@ -35,13 +35,11 @@ public class OpenAiService {
         requestBody.put("model", aiModelName);
         requestBody.put("response_format", Map.of("type", "json_object"));
 
-        // 텍스트와 이미지를 하나의 리스트로 조립
         List<Map<String, Object>> contentList = new ArrayList<>();
         contentList.add(Map.of("type", "text", "text", userPrompt));
 
         if (base64Images != null && !base64Images.isEmpty()) {
             for (String base64 : base64Images) {
-                // detail: low
                 contentList.add(Map.of(
                         "type", "image_url",
                         "image_url", Map.of(
@@ -82,7 +80,7 @@ public class OpenAiService {
             throw new RuntimeException("AI 분석 서비스 통신 실패", e);
         }
     }
-    // 챗봇
+
     public String getChatbotResponse(String systemPrompt, String userMessage) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);

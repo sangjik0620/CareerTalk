@@ -15,7 +15,6 @@ public class AudioFeatureExtractor {
 
     private final ObjectMapper om = new ObjectMapper();
 
-    // ffprobe로 duration seconds 추출
     public double getDurationSeconds(Path audioPath) throws Exception {
         List<String> cmd = List.of(
                 "ffprobe",
@@ -32,9 +31,7 @@ public class AudioFeatureExtractor {
         return Double.parseDouble(durStr);
     }
 
-    // ffmpeg volumedetect로 평균 음량(dB) 추출 (에너지 지표)
     public Double getMeanVolumeDb(Path audioPath) throws Exception {
-        // volumedetect는 stderr로 출력됨
         List<String> cmd = List.of(
                 "ffmpeg",
                 "-i", audioPath.toAbsolutePath().toString(),
@@ -45,13 +42,12 @@ public class AudioFeatureExtractor {
 
         String stderr = runWithStderr(cmd);
 
-        // 예: "mean_volume: -18.4 dB"
         String key = "mean_volume:";
         int idx = stderr.lastIndexOf(key);
         if (idx < 0) return null;
 
-        String tail = stderr.substring(idx + key.length()).trim(); // "-18.4 dB ..."
-        String num = tail.split("\\s+")[0]; // "-18.4"
+        String tail = stderr.substring(idx + key.length()).trim();
+        String num = tail.split("\\s+")[0];
         return Double.parseDouble(num);
     }
 
@@ -70,7 +66,7 @@ public class AudioFeatureExtractor {
     private String runWithStderr(List<String> cmd) throws Exception {
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
-        pb.redirectErrorStream(true); // stderr → stdout 합침
+        pb.redirectErrorStream(true);
 
         Process p = pb.start();
 
@@ -91,8 +87,6 @@ public class AudioFeatureExtractor {
     }
 
     public Double getSilenceRatio(Path audioPath) throws Exception {
-        // dB 기준은 일단 -35dB, 최소 침묵 길이 0.3초(너무 민감하지 않게)
-        // 필요하면 -30dB / 0.2s 등으로 조절
         List<String> cmd = List.of(
                 "ffmpeg",
                 "-hide_banner",
@@ -104,7 +98,6 @@ public class AudioFeatureExtractor {
 
         String stderr = runWithStderr(cmd);
 
-        // silence_duration: 1.234 형태들을 모두 찾아 합산
         double silenceTotal = 0.0;
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("silence_duration:\\s*([0-9\\.]+)")
@@ -118,7 +111,6 @@ public class AudioFeatureExtractor {
         if (duration <= 0) return null;
 
         double ratio = silenceTotal / duration;
-        // 0~1 범위로 클램프
         if (ratio < 0) ratio = 0;
         if (ratio > 1) ratio = 1;
         return ratio;
