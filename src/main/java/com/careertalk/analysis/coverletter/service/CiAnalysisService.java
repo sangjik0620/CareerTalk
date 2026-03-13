@@ -673,4 +673,39 @@ public class CiAnalysisService {
                 .updatedAt(updatedAt != null ? updatedAt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) : "-")
                 .build();
     }
+
+    public void deleteCoverLetterAnalysis(String authorizationHeader, Long analysisId) {
+        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) {
+            throw new RuntimeException("인증 토큰이 없습니다.");
+        }
+
+        String jwtToken = authorizationHeader.substring(7);
+        String loginId = jwtUtil.getLoginId(jwtToken);
+
+        Member member = memberService.findByLoginId(loginId);
+        if (member == null) {
+            throw new RuntimeException("로그인 사용자를 찾을 수 없습니다.");
+        }
+
+        Long userNum = member.getUserNum();
+
+        CiAnalysis analysis = ciAnalysisRepository.findById(analysisId)
+                .orElseThrow(() -> new RuntimeException("삭제할 분석 결과가 없습니다."));
+
+        if (!userNum.equals(analysis.getUserNum())) {
+            throw new RuntimeException("본인의 분석 결과만 삭제할 수 있습니다.");
+        }
+
+        if (!"ESSAY".equalsIgnoreCase(analysis.getTargetType())) {
+            throw new RuntimeException("자기소개서 분석 결과가 아닙니다.");
+        }
+
+        Long essayId = analysis.getTargetId();
+
+        ciAnalysisRepository.delete(analysis);
+
+        if (essayId != null) {
+            ciEssayRepository.findById(essayId).ifPresent(ciEssayRepository::delete);
+        }
+    }
 }
