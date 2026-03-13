@@ -92,7 +92,7 @@ public class ResumeAnalysisController {
             @PathVariable("analysisId") Long analysisId
     ){
         Long currentUserId = getCurrentUserId();
-        log.info("\"이력서 분석 삭제 요청 - AnalysisId: {}, User: {}\", analysisId, loginId");
+        log.info("\"이력서 분석 삭제 요청 - AnalysisId: {}, User: {}\", analysisId, currentUserId");
 
         // analysis, files, resumes db 내용 삭제
         resumeService.deleteResumeAnalysis(analysisId, currentUserId);
