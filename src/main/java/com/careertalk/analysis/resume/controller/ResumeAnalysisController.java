@@ -97,6 +97,6 @@ public class ResumeAnalysisController {
         // analysis, files, resumes db 내용 삭제
         resumeService.deleteResumeAnalysis(analysisId, currentUserId);
 
-        return ResponseEntity.ok("포트폴리오 분석 기록과 파일이 성공적으로 삭제되었습니다.");
+        return ResponseEntity.ok("이력서 분석 기록과 파일이 성공적으로 삭제되었습니다.");
     }
 }
