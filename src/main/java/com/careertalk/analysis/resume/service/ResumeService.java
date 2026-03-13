@@ -359,6 +359,40 @@ public class ResumeService {
         if (file.getSize() > MAX_FILE_SIZE_BYTES) {
             throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "파일 용량은 최대 20MB까지 가능합니다.");
         }
+        checkEncrypted(file);
+    }
+
+    /** 암호화된 DOCX 파일 여부 확인 */
+    private void checkEncrypted(MultipartFile file) {
+        try (InputStream is = file.getInputStream()) {
+            byte[] header = is.readNBytes(8);
+
+            // OLE2 시그니처: D0 CF 11 E0 A1 B1 1A E1 → 암호화된 DOCX
+            if (header.length >= 8
+                    && (header[0] & 0xFF) == 0xD0
+                    && (header[1] & 0xFF) == 0xCF
+                    && (header[2] & 0xFF) == 0x11
+                    && (header[3] & 0xFF) == 0xE0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "암호화된 파일은 업로드할 수 없습니다. 암호를 해제한 후 다시 업로드해 주세요.");
+            }
+
+            // ZIP 시그니처(50 4B 03 04)가 아닌 경우도 유효하지 않은 DOCX로 처리
+            if (header.length < 4
+                    || (header[0] & 0xFF) != 0x50
+                    || (header[1] & 0xFF) != 0x4B
+                    || (header[2] & 0xFF) != 0x03
+                    || (header[3] & 0xFF) != 0x04) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "유효하지 않은 DOCX 파일입니다.");
+            }
+
+        } catch (ResponseStatusException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("파일 암호화 검사 중 오류 발생", e);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "파일을 읽는 중 오류가 발생했습니다.");
+        }
     }
 
     private boolean isDocx(String filename) {
