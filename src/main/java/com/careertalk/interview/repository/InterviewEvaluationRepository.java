@@ -21,18 +21,18 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
     @Modifying
     @Transactional
     @Query(value = """
-            INSERT INTO interview_evaluations
-              (session_id, overall_score, strengths, weaknesses, next_actions, result_json, generated_at)
-            VALUES
-              (:sessionId, :overallScore, :strengths, :weaknesses, :nextActions, CAST(:resultJson AS JSON), NOW())
-            ON DUPLICATE KEY UPDATE
-              overall_score = VALUES(overall_score),
-              strengths     = VALUES(strengths),
-              weaknesses    = VALUES(weaknesses),
-              next_actions  = VALUES(next_actions),
-              result_json   = VALUES(result_json),
-              generated_at  = NOW()
-            """, nativeQuery = true)
+        INSERT INTO interview_evaluations
+          (session_id, overall_score, strengths, weaknesses, next_actions, result_json, generated_at)
+        VALUES
+          (:sessionId, :overallScore, :strengths, :weaknesses, :nextActions, CAST(:resultJson AS JSON), DATE_ADD(UTC_TIMESTAMP(), INTERVAL 9 HOUR))
+        ON DUPLICATE KEY UPDATE
+          overall_score = VALUES(overall_score),
+          strengths     = VALUES(strengths),
+          weaknesses    = VALUES(weaknesses),
+          next_actions  = VALUES(next_actions),
+          result_json   = VALUES(result_json),
+          generated_at  = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 9 HOUR)
+        """, nativeQuery = true)
     int upsert(
             @Param("sessionId") Long sessionId,
             @Param("overallScore") Integer overallScore,
@@ -54,13 +54,19 @@ public interface InterviewEvaluationRepository extends JpaRepository<InterviewEv
     @Modifying
     @Transactional
     @Query(value = """
-            UPDATE interview_evaluations
-            SET analysis_status = :status,
-                analysis_started_at = CASE WHEN :status = 'PROCESSING' THEN NOW() ELSE analysis_started_at END,
-                analysis_completed_at = CASE WHEN :status IN ('DONE','FAILED') THEN NOW() ELSE analysis_completed_at END,
-                analysis_error_message = :errorMessage
-            WHERE session_id = :sessionId
-            """, nativeQuery = true)
+        UPDATE interview_evaluations
+        SET analysis_status = :status,
+            analysis_started_at = CASE
+                WHEN :status = 'PROCESSING' THEN DATE_ADD(UTC_TIMESTAMP(), INTERVAL 9 HOUR)
+                ELSE analysis_started_at
+            END,
+            analysis_completed_at = CASE
+                WHEN :status IN ('DONE','FAILED') THEN DATE_ADD(UTC_TIMESTAMP(), INTERVAL 9 HOUR)
+                ELSE analysis_completed_at
+            END,
+            analysis_error_message = :errorMessage
+        WHERE session_id = :sessionId
+        """, nativeQuery = true)
     int updateAnalysisStatus(
             @Param("sessionId") Long sessionId,
             @Param("status") String status,
