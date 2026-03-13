@@ -4,4 +4,5 @@ import com.careertalk.file.entity.FileEntity;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface FileRepository extends JpaRepository<FileEntity, Long> {
+    void deleteByUserNum(Long userNum);
 }

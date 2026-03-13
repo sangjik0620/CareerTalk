@@ -6,4 +6,5 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public interface ResumeRepository extends JpaRepository<ResumeEntity, Long> {
+    void deleteByUserNum(Long userNum);
 }

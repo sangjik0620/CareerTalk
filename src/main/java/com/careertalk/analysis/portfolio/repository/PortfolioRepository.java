@@ -6,5 +6,5 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public interface PortfolioRepository extends JpaRepository<PortfolioEntity, Long> {
-
+    void deleteByUserNum(Long userNum);
 }

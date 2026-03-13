@@ -1,11 +1,17 @@
 package com.careertalk.auth.service;
 
+import com.careertalk.analysis.common.repository.AnalysisRepository;
+import com.careertalk.analysis.coverletter.repository.CIEssayRepository;
+import com.careertalk.analysis.portfolio.repository.PortfolioRepository;
+import com.careertalk.analysis.resume.repository.ResumeRepository;
 import com.careertalk.auth.dto.LoginRequestDTO;
 import com.careertalk.auth.dto.SignupRequestDTO;
 import com.careertalk.auth.dto.SocialSignupRequestDTO;
 import com.careertalk.auth.dto.UpdateRequestDTO;
 import com.careertalk.auth.entity.Member;
 import com.careertalk.auth.repository.MemberRepository;
+import com.careertalk.file.repository.FileRepository;
+import com.careertalk.interview.repository.InterviewSessionRepository;
 import com.careertalk.payment.service.QuotaService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -22,10 +28,18 @@ import com.careertalk.auth.jwt.JwtUtil;
 @Transactional
 public class MemberService {
 
+    private final AnalysisRepository analysisRepository;
+    private final ResumeRepository resumeRepository;
+    private final CIEssayRepository ciEssayRepository;
+    private final PortfolioRepository portfolioRepository;
+    private final InterviewSessionRepository interviewSessionRepository;
+
     private final MemberRepository memberRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final QuotaService quotaService;
+
+    private final FileRepository fileRepository;
 
     /* 일반 회원가입 */
     public String signup(SignupRequestDTO signupRequestDTO) {
@@ -166,8 +180,27 @@ public class MemberService {
 
     @Transactional
     public void deleteMemberByLoginId(String loginId) {
+        // 1. 회원 정보 조회
         Member member = memberRepository.findByLoginId(loginId)
-                .orElseThrow(() -> new RuntimeException("회원 없음"));
+                .orElseThrow(() -> new RuntimeException("회원 정보를 찾을 수 없습니다."));
+
+        Long userNum = member.getUserNum();
+
+        // 분석 통합 기록 삭제
+        analysisRepository.deleteByUserNum(userNum);
+
+        // 이력서, 자기소개서, 포트폴리오 개별 데이터 삭제
+        resumeRepository.deleteByUserNum(userNum);
+        ciEssayRepository.deleteByUserNum(userNum);
+        portfolioRepository.deleteByUserNum(userNum);
+
+        // 연관된 모든 데이터 삭제
+        fileRepository.deleteByUserNum(userNum);
+
+        // 면접 세션 기록 삭제
+        interviewSessionRepository.deleteByUserNum(userNum);
+
+        // 3. 최종적으로 회원 계정 삭제
         memberRepository.delete(member);
     }
 }

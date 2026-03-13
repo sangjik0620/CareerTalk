@@ -13,4 +13,6 @@ public interface InterviewSessionRepository extends JpaRepository<InterviewSessi
 
     @Transactional
     void deleteBySessionId(Long sessionId);
+
+    void deleteByUserNum(Long userNum);
 }
