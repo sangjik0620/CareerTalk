@@ -81,7 +81,6 @@ public class S3Service {
             s3Client.deleteObject(deleteObjectRequest);
 
         } catch (Exception e) {
-            // S3 파일 삭제가 실패하면 에러를 던져서 DB 삭제도 같이 취소(Rollback)되게 만듭니다.
             throw new RuntimeException("S3 원본 파일 삭제 중 오류가 발생했습니다: " + e.getMessage());
         }
     }

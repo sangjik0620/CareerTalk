@@ -58,12 +58,10 @@ public class PortfolioAnalysisController {
     public ResponseEntity<String> deletePortfolioAnalysis(
             @PathVariable("analysisId") Long analysisId
     ) {
-        // 로그인 ID 추출
         String loginId = (String) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
 
         log.info("포트폴리오 분석 삭제 요청 - AnalysisId: {}, User: {}", analysisId, loginId);
 
-        // 3단 삭제 로직 호출
         portfolioAnalysisService.deletePortfolioAnalysis(analysisId, loginId);
 
         return ResponseEntity.ok("포트폴리오 분석 기록과 파일이 성공적으로 삭제되었습니다.");

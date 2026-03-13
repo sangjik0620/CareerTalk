@@ -255,9 +255,7 @@ public class PortfolioAnalysisService {
                 .build();
     }
 
-    /**
-     * 포트폴리오 분석 기록을 완전 삭제 (S3 파일 + DB 레코드 3종)
-     */
+    /* 포트폴리오 분석 기록 삭제 */
     @Transactional
     public void deletePortfolioAnalysis(Long analysisId, String loginId) {
 
@@ -288,7 +286,6 @@ public class PortfolioAnalysisService {
             FileEntity fileEntity = fileRepository.findById(fileId).orElse(null);
 
             if (fileEntity != null) {
-                // AWS S3 저장소에서 파일 삭제
                 String s3Key = fileEntity.getS3Key();
                 try {
                     s3Service.deleteFile(s3Key);
