@@ -96,4 +96,19 @@ public class QuotaService {
                         .build()
         );
     }
+
+    @Transactional
+    public void createInitialQuota(Long userNum) {
+        quotaRepository.findByUserNum(userNum).ifPresent(q -> {
+            throw new IllegalStateException("이미 이용권 정보가 존재합니다.");
+        });
+
+        quotaRepository.save(UserUsageQuota.builder()
+                .userNum(userNum)
+                .freeAnalysisRemaining(2)   // 원하는 기본값
+                .freeMockRemaining(1)       // 원하는 기본값
+                .paidAnalysisRemaining(0)
+                .paidMockRemaining(0)
+                .build());
+    }
 }
