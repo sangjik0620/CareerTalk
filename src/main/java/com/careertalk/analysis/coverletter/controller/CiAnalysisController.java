@@ -46,4 +46,13 @@ public class CiAnalysisController {
         CiAnalysisResponse response = ciAnalysisService.getAnalysisResult(authorization, analysisId);
         return ResponseEntity.ok(response);
     }
+
+    @DeleteMapping("/{analysisId}")
+    public ResponseEntity<String> deleteAnalysis(
+            @RequestHeader("Authorization") String authorization,
+            @PathVariable Long analysisId
+    ) {
+        ciAnalysisService.deleteCoverLetterAnalysis(authorization, analysisId);
+        return ResponseEntity.ok("자기소개서 분석 기록이 삭제되었습니다.");
+    }
 }
