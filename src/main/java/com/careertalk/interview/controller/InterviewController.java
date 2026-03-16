@@ -205,13 +205,10 @@ public class InterviewController {
                 Map<String, Object> dto = new HashMap<>();
 
                 dto.put("id", session.getSessionId());
-                // ⚠️ InterviewSession의 생성일 필드명에 맞게 수정 (예: getCreatedAt)
                 dto.put("date", session.getCreatedAt().toString().substring(0, 10));
 
-                // 프론트 화면에 보여줄 면접 타입과 제목 (DB에 값이 없다면 임의의 문자열을 넣어도 좋습니다)
                 dto.put("type", "AI 모의 면접");
                 dto.put("title", "직무 역량 중심 면접");
-
                 // ⚠️ InterviewSession에 소요시간(초)이 저장되어 있다면 분 단위로 변환
                 // int durationSec = session.getDurationSec();
                 // dto.put("duration", (durationSec / 60) + "분 " + (durationSec % 60) + "초");
