@@ -56,12 +56,9 @@ public class InterviewService {
         if (files == null || files.size() != questionCount)
             throw new IllegalArgumentException("files size must match questionCount");
 
-        // 1) 세션 생성 (title은 DB DEFAULT)
-        // 1) 세션 생성 (title 기본값 세팅)
         InterviewSession session = new InterviewSession();
         session.setUserNum(userId);
 
-        // ✅ 추가: title 기본값
         session.setTitle("AI 모의면접");
 
         session.setJobCategory(
@@ -72,17 +69,14 @@ public class InterviewService {
         session = sessionRepository.save(session);
         String keyPrefix = "interview/" + session.getSessionId();
 
-        // 2) turns + files 저장
         for (int i = 0; i < questionCount; i++) {
             MultipartFile audio = files.get(i);
 
             Long audioFileId = null;
 
             if (audio != null && !audio.isEmpty()) {
-                // S3 업로드
                 S3Uploader.UploadResult up = s3Uploader.upload(audio, keyPrefix);
 
-                // files insert
                 FileEntity f = new FileEntity();
                 f.setUserNum(userId);
                 f.setFileType("AUDIO");
@@ -92,7 +86,7 @@ public class InterviewService {
                 f.setS3Bucket(up.bucket());
                 f.setS3Key(up.s3Key());
                 f.setS3KeyHash(sha256Bytes(up.bucket() + ":" + up.s3Key()));
-                f.setFileUrl(null); // PRIVATE이면 presigned로 제공
+                f.setFileUrl(null);
                 f.setStatus("ACTIVE");
 
                 f = fileRepository.save(f);
