@@ -321,7 +321,6 @@ public class InterviewEvaluationService {
             throw new IllegalStateException("LLM returned invalid JSON. raw=" + shorten(raw, 500));
         }
 
-        // summary merge
         ObjectNode summary = (ObjectNode) evaluation.with("summary");
         JsonNode outSummary = out.path("summary");
 
@@ -350,7 +349,6 @@ public class InterviewEvaluationService {
             summary.put("verdict", outSummary.path("verdict").asText("").trim());
         }
 
-        // competency merge
         ObjectNode competency = (ObjectNode) evaluation.with("competency");
         JsonNode outComp = out.path("competency");
 
@@ -398,7 +396,6 @@ public class InterviewEvaluationService {
         log.info("[LLM COMP RAW] soft={}", safeWrite(outComp.path("soft")));
         competency.set("improvements", normalizeImprovements(outComp.path("improvements")));
 
-        // summary fallback
         int technicalIndex = clamp0_100(summary.path("technicalIndex").asInt(0));
         if (technicalIndex == 0 && competency.path("technical").path("current").isNumber()) {
             technicalIndex = clamp0_100(competency.path("technical").path("current").asInt());
@@ -434,7 +431,6 @@ public class InterviewEvaluationService {
         }
         summary.put("confidenceIndex", confidenceIndex);
 
-        // interviewAnalysis merge
         ObjectNode interview = (ObjectNode) evaluation.with("interviewAnalysis");
         JsonNode outInterview = out.path("interviewAnalysis");
 

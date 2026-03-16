@@ -175,7 +175,6 @@ public class InterviewController {
         ));
     }
 
-    // 마이페이지: 내 면접 기록 전체 조회 API
     @GetMapping("/my")
     public ResponseEntity<List<Map<String, Object>>> getMyInterviews(
             @RequestHeader(value = "Authorization", required = false) String token) {
@@ -185,7 +184,6 @@ public class InterviewController {
         }
 
         try {
-            // 1. 토큰에서 로그인 아이디 추출 및 유저 조회
             String jwtToken = token.substring(7);
             String loginId = jwtUtil.getLoginId(jwtToken);
             Member member = memberService.findByLoginId(loginId);
@@ -195,26 +193,18 @@ public class InterviewController {
             }
             Long userNum = member.getUserNum();
 
-            // 2. 내 면접 기록 최신순 조회
             List<InterviewSession> sessions = sessionRepository.findAllByUserNumOrderByCreatedAtDesc(userNum);
 
-            // 3. 프론트엔드 형식으로 변환
             List<Map<String, Object>> result = new ArrayList<>();
             for (InterviewSession session : sessions) {
                 Map<String, Object> dto = new HashMap<>();
 
                 dto.put("id", session.getSessionId());
-                // ⚠️ InterviewSession의 생성일 필드명에 맞게 수정 (예: getCreatedAt)
                 dto.put("date", session.getCreatedAt().toString().substring(0, 10));
 
-                // 프론트 화면에 보여줄 면접 타입과 제목 (DB에 값이 없다면 임의의 문자열을 넣어도 좋습니다)
                 dto.put("type", "AI 모의 면접");
                 dto.put("title", "직무 역량 중심 면접");
-
-                // ⚠️ InterviewSession에 소요시간(초)이 저장되어 있다면 분 단위로 변환
-                // int durationSec = session.getDurationSec();
-                // dto.put("duration", (durationSec / 60) + "분 " + (durationSec % 60) + "초");
-                dto.put("duration", "진행 완료"); // 임시 텍스트
+                dto.put("duration", "진행 완료");
 
                 result.add(dto);
             }

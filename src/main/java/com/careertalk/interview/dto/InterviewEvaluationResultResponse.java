@@ -220,7 +220,7 @@ public class InterviewEvaluationResultResponse {
     @Builder
     public static class Improvement {
         private String area;
-        private String priority; // high/medium
+        private String priority;
         private Integer currentLevel;
         private Integer targetLevel;
         private List<String> actionItems;
